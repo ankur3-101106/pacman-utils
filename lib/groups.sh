@@ -7,43 +7,43 @@
 # Each group is defined as GROUP_<name>="pkg1 pkg2 pkg3"
 # and GROUP_DESC_<name>="description"
 
-declare -A GROUPS
+declare -A PKG_GROUPS
 declare -A GROUP_DESC
 
-GROUPS[gnome]="gnome gnome-extra gdm gnome-tweaks"
+PKG_GROUPS[gnome]="gnome gnome-extra gdm gnome-tweaks"
 GROUP_DESC[gnome]="GNOME Desktop Environment"
 
-GROUPS[kde]="plasma kde-applications sddm"
+PKG_GROUPS[kde]="plasma kde-applications sddm"
 GROUP_DESC[kde]="KDE Plasma Desktop"
 
-GROUPS[hyprland]="hyprland waybar wofi kitty swaybg swaylock mako grim slurp"
+PKG_GROUPS[hyprland]="hyprland waybar wofi kitty swaybg swaylock mako grim slurp"
 GROUP_DESC[hyprland]="Hyprland Wayland Compositor"
 
-GROUPS[sway]="sway swaylock swayidle waybar wofi foot mako grim slurp"
+PKG_GROUPS[sway]="sway swaylock swayidle waybar wofi foot mako grim slurp"
 GROUP_DESC[sway]="Sway Wayland Compositor"
 
-GROUPS[i3]="i3-wm i3status i3lock dmenu alacritty picom feh dunst"
+PKG_GROUPS[i3]="i3-wm i3status i3lock dmenu alacritty picom feh dunst"
 GROUP_DESC[i3]="i3 Window Manager"
 
-GROUPS[dev]="base-devel git nodejs npm python python-pip go rustup docker docker-compose"
+PKG_GROUPS[dev]="base-devel git nodejs npm python python-pip go rustup docker docker-compose"
 GROUP_DESC[dev]="Development Essentials"
 
-GROUPS[gaming]="steam lutris wine-staging gamemode lib32-mesa lib32-vulkan-icd-loader mangohud"
+PKG_GROUPS[gaming]="steam lutris wine-staging gamemode lib32-mesa lib32-vulkan-icd-loader mangohud"
 GROUP_DESC[gaming]="Gaming (Steam, Lutris, Wine)"
 
-GROUPS[multimedia]="vlc obs-studio gimp inkscape audacity ffmpeg mpv imagemagick"
+PKG_GROUPS[multimedia]="vlc obs-studio gimp inkscape audacity ffmpeg mpv imagemagick"
 GROUP_DESC[multimedia]="Multimedia (Video, Audio, Graphics)"
 
-GROUPS[networking]="networkmanager nm-connection-editor openssh curl wget nmap wireshark-qt"
+PKG_GROUPS[networking]="networkmanager nm-connection-editor openssh curl wget nmap wireshark-qt"
 GROUP_DESC[networking]="Networking Tools"
 
-GROUPS[fonts]="ttf-dejavu ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-fira-code ttf-jetbrains-mono"
+PKG_GROUPS[fonts]="ttf-dejavu ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-fira-code ttf-jetbrains-mono"
 GROUP_DESC[fonts]="Essential Fonts"
 
-GROUPS[terminal]="zsh fish starship tmux neovim htop btop bat eza fd ripgrep fzf gum"
+PKG_GROUPS[terminal]="zsh fish starship tmux neovim htop btop bat eza fd ripgrep fzf gum"
 GROUP_DESC[terminal]="Terminal Power Tools"
 
-GROUPS[security]="ufw gufw clamav firejail keepassxc gnupg"
+PKG_GROUPS[security]="ufw gufw clamav firejail keepassxc gnupg"
 GROUP_DESC[security]="Security Tools"
 
 # ── Groups Menu ──────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ groups_menu() {
 
 _group_install() {
     local group_key="$1"
-    local packages="${GROUPS[$group_key]}"
+    local packages="${PKG_GROUPS[$group_key]}"
     local desc="${GROUP_DESC[$group_key]}"
 
     ui_header "$desc"
@@ -123,7 +123,7 @@ _group_install() {
     case "$method" in
         *"Install all"*)
             if ui_confirm "Install all $total packages?"; then
-                log_action "GROUPS: Installing all packages for $desc"
+                log_action "PKG_GROUPS: Installing all packages for $desc"
                 _group_do_install "${pkg_array[@]}"
             fi
             ;;
@@ -137,7 +137,7 @@ _group_install() {
             if [[ ${#missing[@]} -eq 0 ]]; then
                 ui_success "All packages are already installed!"
             elif ui_confirm "Install ${#missing[@]} missing packages?"; then
-                log_action "GROUPS: Installing ${#missing[@]} missing for $desc"
+                log_action "PKG_GROUPS: Installing ${#missing[@]} missing for $desc"
                 _group_do_install "${missing[@]}"
             fi
             ;;
