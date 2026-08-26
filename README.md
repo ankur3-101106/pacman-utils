@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" />
   <img src="https://img.shields.io/badge/Shell-Bash-4EAA25?style=for-the-badge&logo=gnu-bash&logoColor=white" />
   <img src="https://img.shields.io/badge/License-GPL_2.0-blue?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Version-1.0.0-green?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Version-1.1.0-green?style=for-the-badge" />
 </p>
 
 ---
