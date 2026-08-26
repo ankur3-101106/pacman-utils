@@ -1,169 +1,135 @@
 # archman — Interactive Arch Linux System Manager
 
 <p align="center">
-  <b>A full-featured, menu-driven terminal utility for managing your Arch Linux system.</b>
+  <b>A fast, keyboard-driven terminal dashboard for managing your Arch Linux system.</b>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" />
-  <img src="https://img.shields.io/badge/Shell-Bash-4EAA25?style=for-the-badge&logo=gnu-bash&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-GPL_2.0-blue?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Version-1.1.0-green?style=for-the-badge" />
+  <a href="https://www.archlinux.org/"><img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" alt="Arch Linux" /></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" /></a>
+  <img src="https://img.shields.io/badge/Version-2.0.0-green?style=for-the-badge" alt="version" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL_2.0-blue?style=for-the-badge" alt="GPL-2.0" /></a>
 </p>
 
 ---
 
+**archman** is a native **Rust** TUI (built on [ratatui](https://github.com/ratatui/ratatui) + [crossterm](https://github.com/crossterm-rs/crossterm)) inspired by [LinUtil](https://github.com/ChrisTitusTech/linutil). Everything lives in one dashboard: a category sidebar with live system info, a flat action list with descriptions, a global search, and an embedded command runner — pacman, AUR helpers and reflector execute *inside the pane*, with your keystrokes (sudo passwords, `[Y/n]` prompts) forwarded straight to them.
+
+```
+ ╔════════════════╦ SEARCH ══════════════════════╗
+ ║  ▄▀█ █▀█ █▀▀   ║ Type to search (/)           ║
+ ║  █▀█ █▀▄ █░░   ╠═ ARCHMAN ─────────────────────╣
+ ║  archman v2.0.0║ ▸ Install Package             ║
+ ╠════════════════╡   Search Packages             ║
+ ║ ▸ 1 📦 Packages │   Remove Package …           ║
+ ║   2 ⬆ System    │                              ║
+ ╠════════════════╡                              ║
+ ║ SYSTEM         │                              ║
+ ║  CPU: … RAM: … ║                              ║
+ ╠════════════════╧══════════════════════════════╣
+ ║ Command list                                  ║
+ ║ [q] Exit   [tab] Category   [/] Search  …     ║
+ ╚═══════════════════════════════════════════════╝
+```
+
 ## ✨ Features
 
-| Feature | Description |
-|---------|-------------|
-| 📦 **Install Package** | Auto-detects official repos vs AUR, dry-run mode |
-| 🗑 **Remove Package** | Fuzzy-search installed packages, 3 removal strategies |
-| 🔍 **Search Packages** | Searches official repos + AUR, colored results |
-| 📋 **Package Utilities** | List, orphans, file ownership, info, history, reinstall |
-| ⬆ **System Update** | Database refresh, pacman upgrade, AUR upgrade |
-| 🧹 **Cache Cleaning** | paccache integration, configurable keep count |
-| 🔒 **Lock File** | Detect & remove `db.lck` with safety checks |
-| 🌍 **Mirror Management** | reflector integration, backup & restore |
-| 📊 **System Information** | Comprehensive system overview dashboard |
-| ⭐ **Favorites** | Save, sync, and bulk-install your must-have packages |
-| 📦 **Package Groups** | 12 curated groups (GNOME, KDE, Hyprland, Dev, Gaming...) |
-| 📤 **Export / Import** | Backup and restore package lists across systems |
-| ⚙ **Settings** | AUR helper, dry-run, logging, and more |
-| 📋 **Transaction Logs** | View pacman history with filters |
+| | Feature | Description |
+|--|---------|-------------|
+| 📦 | **Packages** | Install (official + AUR, dry-run mode), search, remove (3 strategies), browse, file ownership, package info, history, transaction log, reinstall, orphans, export/import lists |
+| ⬆ | **System** | Update check (`checkupdates`), database refresh, full upgrades via pacman or your AUR helper |
+| 🧹 | **Maintenance** | Cache cleaning (`paccache -rkN`, `-Sc`, `-Scc`), safe `db.lck` removal |
+| 🌍 | **Mirrors** | reflector auto-update & ranking, mirrorlist backup/restore |
+| 📊 | **Information** | System dashboard, dependency check with one-key installs |
+| ⭐ | **Extras** | Favorite packages, 12 curated package groups, list import |
+| ⚙ | **Settings** | AUR helper (incl. building yay/paru from AUR), dry-run, confirmations, logging, cache retention |
 
-## 🎨 Beautiful TUI
+## ⌨ Keyboard Shortcuts
 
-archman is built around [**gum**](https://github.com/charmbracelet/gum) for a polished, modern terminal experience:
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` (`k` / `j`) | Move selection |
+| `/` | Search all actions |
+| `tab` / `shift+tab` | Next / previous category |
+| `1` … `7` | Jump straight to a category |
+| `g` / `G` | First / last action |
+| `enter` | Run or open the selected action |
+| `esc` | Go back · clear search filter |
+| `q` | Quit |
+| `?` | Shortcut cheatsheet overlay |
+| `ctrl+c` | Quit / interrupt a running command |
 
-- 🎯 Arrow-key menu navigation
-- 🔍 Fuzzy filtering for package lists
-- ✅ Styled confirmation dialogs
-- ⏳ Animated spinners for long operations
-- 📄 Scrollable pager for logs
+> ♿ **Accessibility** — every category has a color *and* a number; selection uses a cursor glyph plus bold-italic text (never color alone); statuses pair icons (`✔ ⚠ ✘`) with color; secondary text uses high-contrast grays; and `NO_COLOR` strips all styling while every cue stays legible.
 
-> **Works without gum too!** Plain-text fallbacks ensure the script runs on any terminal.
+## 🖥 Embedded command runner
+
+Commands never take over your terminal. They run on a pseudo-terminal **inside the action pane**:
+
+- output streams live, with progress bars rendered sanely
+- sudo password prompts and pacman `[Y/n]` work right in the pane
+- the border is **cyan** while running, **green** on success, **red** on failure
+- `ctrl+c` interrupts · `pgup` / `pgdn` browse scrollback
+- launching from any sub-screen returns you to the dashboard while it runs
 
 ## 📦 Installation
 
-### Quick Install
-
 ```bash
-git clone https://github.com/ankur3/pacman-utils.git
+git clone https://github.com/ankur3-101106/pacman-utils.git
 cd pacman-utils
-chmod +x install.sh
-./install.sh
+./install.sh          # builds with cargo, installs to /usr/local/bin
 ```
 
-### Manual Install
+Manual build:
 
 ```bash
-sudo cp archman /usr/local/bin/archman
-sudo mkdir -p /usr/local/lib/archman
-sudo cp lib/*.sh /usr/local/lib/archman/
-sudo chmod 755 /usr/local/bin/archman
-```
-
-### Run From Source
-
-```bash
-chmod +x archman
-./archman
+cargo build --release
+sudo cp target/release/archman /usr/local/bin/
 ```
 
 ## 🔧 Dependencies
 
 | Dependency | Required | Purpose |
 |------------|----------|---------|
-| `pacman` | ✅ Yes | Core package manager |
-| `bash` ≥ 4.0 | ✅ Yes | Shell |
-| [`gum`](https://github.com/charmbracelet/gum) | ⭐ Recommended | Beautiful TUI components |
-| [`fzf`](https://github.com/junegunn/fzf) | Optional | Fuzzy finder (fallback) |
-| `yay` / `paru` | Optional | AUR helper |
-| `reflector` | Optional | Mirror management |
-| `pacman-contrib` | Optional | Cache cleaning (`paccache`) |
-
-Install recommended dependencies:
-
-```bash
-sudo pacman -S gum fzf reflector pacman-contrib
-```
+| `pacman` | ✅ | Core package manager |
+| Rust toolchain | ✅ to build | [rustup](https://rustup.rs) or `sudo pacman -S rust` |
+| `yay` / `paru` | optional | AUR helper |
+| `reflector` | optional | Mirror management |
+| `pacman-contrib` | optional | `paccache` + `checkupdates` |
 
 ## ⚙ Configuration
 
-Configuration is stored at `~/.config/archman/`:
+Everything lives in `~/.config/archman/` (created on first launch, same format since v1):
 
 | File | Purpose |
 |------|---------|
-| `settings.conf` | All settings (AUR helper, dry-run, etc.) |
-| `favorites.txt` | Your favorite packages list |
+| `settings.conf` | AUR helper, dry-run, confirmations, logging, cache retention |
+| `favorites.txt` | Your favorite packages |
 | `archman.log` | Activity log |
-
-### Settings
-
-| Setting | Default | Options |
-|---------|---------|---------|
-| `AUR_HELPER` | `yay` | `yay`, `paru` |
-| `DRY_RUN` | `false` | `true`, `false` |
-| `CONFIRM_ACTIONS` | `true` | `true`, `false` |
-| `LOG_ENABLED` | `true` | `true`, `false` |
-| `PACCACHE_KEEP` | `3` | `1`-`10` |
-
-## 📦 Package Groups
-
-Pre-configured package groups for quick setup:
-
-| Group | Packages |
-|-------|----------|
-| 🖥 GNOME | `gnome gnome-extra gdm gnome-tweaks` |
-| 🖥 KDE Plasma | `plasma kde-applications sddm` |
-| 🪟 Hyprland | `hyprland waybar wofi kitty swaybg swaylock mako grim slurp` |
-| 🪟 Sway | `sway swaylock swayidle waybar wofi foot mako grim slurp` |
-| 🪟 i3 | `i3-wm i3status i3lock dmenu alacritty picom feh dunst` |
-| 💻 Development | `base-devel git nodejs npm python go rustup docker` |
-| 🎮 Gaming | `steam lutris wine-staging gamemode lib32-mesa mangohud` |
-| 🎬 Multimedia | `vlc obs-studio gimp inkscape audacity ffmpeg mpv` |
-| 🌐 Networking | `networkmanager openssh curl wget nmap wireshark-qt` |
-| 🔤 Fonts | `ttf-dejavu ttf-liberation noto-fonts ttf-fira-code ttf-jetbrains-mono` |
-| 💻 Terminal | `zsh fish starship tmux neovim htop btop bat eza fd ripgrep fzf gum` |
-| 🔒 Security | `ufw gufw clamav firejail keepassxc gnupg` |
 
 ## 📖 Usage
 
 ```bash
-# Launch interactive menu
-archman
-
-# Show version
+archman              # launch the dashboard
 archman --version
-
-# Show help
 archman --help
 ```
 
 ## 🏗 Project Structure
 
 ```
-pacman-utils/
-├── archman              # Main entry point
-├── install.sh           # System-wide installer
-├── lib/
-│   ├── ui.sh            # UI library (gum wrappers, fallbacks)
-│   ├── settings.sh      # Settings management
-│   ├── install.sh       # Package installation
-│   ├── remove.sh        # Package removal
-│   ├── search.sh        # Package search
-│   ├── update.sh        # System updates
-│   ├── cache.sh         # Cache cleaning
-│   ├── lockfile.sh      # Lock file management
-│   ├── mirrors.sh       # Mirror management
-│   ├── info.sh          # System information
-│   ├── packages.sh      # Package utilities
-│   ├── export_import.sh # Export/import lists
-│   ├── favorites.sh     # Favorites management
-│   └── groups.sh        # Package group installer
-├── LICENSE              # GPL-2.0
-└── README.md            # This file
+src/
+├── main.rs          # entry point: CLI flags, terminal lifecycle
+├── app.rs           # screen stack, modals, event loop, embedded runner
+├── widgets.rs       # logo, menus, fuzzy lists, pagers, theme, cheatsheet
+├── settings.rs      # ~/.config/archman (settings, favorites, log)
+├── sys.rs           # pacman / AUR / reflector wrappers, background jobs
+├── pty.rs           # pseudo-terminal execution for embedded commands
+├── fuzzy.rs         # subsequence fuzzy matcher
+└── screens/
+    ├── registry.rs  # declarative category → action table (the whole UI)
+    ├── home.rs      # two-pane dashboard (sidebar + action pane)
+    ├── runpane.rs   # embedded command runner
+    └── …            # one module per feature (install, mirrors, …)
 ```
 
 ## 🤝 Contributing
@@ -174,6 +140,8 @@ pacman-utils/
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+Run `cargo test` before submitting — the suite covers settings, fuzzy matching, the PTY layer and the runner pane.
+
 ## 📄 License
 
-This project is licensed under the **GNU General Public License v2.0** — see the [LICENSE](LICENSE) file for details.
+Licensed under the **GNU General Public License v2.0** — see [LICENSE](LICENSE).
