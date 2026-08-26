@@ -69,6 +69,17 @@ Commands never take over your terminal. They run on a pseudo-terminal **inside t
 
 ## 📦 Installation
 
+**Via GitHub Releases (Pre-compiled Binary):**
+
+Download the latest `archman` binary from the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page, make it executable, and move it to your PATH:
+
+```bash
+chmod +x archman
+sudo mv archman /usr/local/bin/
+```
+
+**Build from Source:**
+
 ```bash
 git clone https://github.com/ankur3-101106/pacman-utils.git
 cd pacman-utils
