@@ -13,14 +13,17 @@ The user-facing surface is declared entirely in `screens/registry.rs`: categorie
 ```bash
 cargo build --release        # release binary at target/release/archman
 cargo check                  # fast type-check (use before building)
-cargo test                   # unit tests (settings epoch/toggle, fuzzy matcher)
+cargo test                   # all unit tests
+cargo test <name>            # single test, e.g. cargo test pushed_screen_clears_dashboard_pane
 ./target/release/archman     # run the TUI
-./install.sh                 # build + install to /usr/local/bin
+./install.sh                 # build, then ask whether to install to /usr/local/bin
 ```
+
+Tests live in `#[cfg(test)]` modules next to the code, five files total: `fuzzy.rs` (matcher), `settings.rs` (epoch/toggle round-trip), `pty.rs` (spawn/read/kill), and render regression tests using ratatui's `TestBackend` in `app.rs` and `screens/runpane.rs` (overlay bleed-through, toast placement). There is no clippy/rustfmt config or CI.
 
 - CLI surface: `--version/-v`, `--help/-h`; anything else is the interactive TUI.
 - The app mutates the system through `sudo pacman` etc. and requires a real terminal — never run it expecting non-interactive completion.
-- There is no headless test harness for the TUI itself. To smoke-test rendering/keys, drive it under a pty with an explicit winsize (e.g. Python `pty.fork()` + `TIOCSWINSZ`); a bare `script -qec` in CI-like shells reports a 0×0 window and renders nothing.
+- Headless render testing works via ratatui's `TestBackend` (see the existing tests in `app.rs`/`runpane.rs` — build an `App`, `term.draw()`, assert on buffer text). For smoke-testing the *real* terminal path (raw mode, keys), drive the binary under a pty with an explicit winsize (e.g. Python `pty.fork()` + `TIOCSWINSZ`); a bare `script -qec` in CI-like shells reports a 0×0 window and renders nothing.
 
 ## Architecture
 

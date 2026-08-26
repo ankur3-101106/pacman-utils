@@ -16,21 +16,17 @@
 **archman** is a native **Rust** TUI (built on [ratatui](https://github.com/ratatui/ratatui) + [crossterm](https://github.com/crossterm-rs/crossterm)) inspired by [LinUtil](https://github.com/ChrisTitusTech/linutil). Everything lives in one dashboard: a category sidebar with live system info, a flat action list with descriptions, a global search, and an embedded command runner — pacman, AUR helpers and reflector execute *inside the pane*, with your keystrokes (sudo passwords, `[Y/n]` prompts) forwarded straight to them.
 
 ```
- ╔════════════════╦ SEARCH ══════════════════════╗
- ║  ▄▀█ █▀█ █▀▀   ║ Type to search (/)           ║
- ║  █▀█ █▀▄ █░░   ╠═ ARCHMAN ─────────────────────╣
- ║  archman v2.0.0║ ▸ Install Package             ║
- ╠════════════════╡   Search Packages             ║
- ║ ▸ 1 📦 Packages │   Remove Package …           ║
- ║   2 ⬆ System    │                              ║
- ╠════════════════╡                              ║
- ║ SYSTEM         │                              ║
- ║  CPU: … RAM: … ║                              ║
- ╠════════════════╧══════════════════════════════╣
- ║ Command list                                  ║
- ║ [q] Exit   [tab] Category   [/] Search  …     ║
- ╚═══════════════════════════════════════════════╝
+ █████╗ ██████╗  ██████╗██╗  ██╗███╗   ███╗ █████╗ ███╗   ██╗
+██╔══██╗██╔══██╗██╔════╝██║  ██║████╗ ████║██╔══██║████╗  ██║
+███████║██████╔╝██║     ███████║██╔████╔██║███████║██╔██╗ ██║
+██╔══██║██╔══██╗██║     ██╔══██║██║╚██╔╝██║██╔══██║██║╚██╗██║
+██║  ██║██║  ██║╚██████╗██║  ██║██║ ╚═╝ ██║██║  ██║██║ ╚████║
+╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝
 ```
+
+<p align="center">
+  <img src="snapshot.png" alt="archman dashboard — category sidebar, action list, live system info and command list" width="100%" />
+</p>
 
 ## ✨ Features
 
@@ -76,7 +72,7 @@ Commands never take over your terminal. They run on a pseudo-terminal **inside t
 ```bash
 git clone https://github.com/ankur3-101106/pacman-utils.git
 cd pacman-utils
-./install.sh          # builds with cargo, installs to /usr/local/bin
+./install.sh          # builds with cargo, then asks whether to install to /usr/local/bin
 ```
 
 Manual build:

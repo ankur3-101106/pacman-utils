@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# install.sh — Build archman and install it to /usr/local
+# install.sh — Build archman, then optionally install it system-wide
 #
-# archman is now a native Rust application (ratatui interface). This
-# script compiles the release binary and places it on your PATH.
+# archman is a native Rust application (ratatui interface). This script
+# always compiles the release binary into target/release/, then asks
+# whether to copy it to /usr/local/bin. Answering "no" (or just wanting
+# a local build) leaves the ready-to-run binary in place.
 # ──────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -14,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo ""
 echo "  ╔═════════════════════════════════════════╗"
-echo "  ║     archman — System-wide Installer     ║"
+echo "  ║      archman — Build & Install          ║"
 echo "  ╚═════════════════════════════════════════╝"
 echo ""
 
@@ -32,21 +34,33 @@ else
     exit 1
 fi
 
-echo "  This will build archman (release mode) and install it to:"
-echo "    Binary: $INSTALL_BIN"
+echo "  Building archman (release mode)..."
+(cd "$SCRIPT_DIR" && "$CARGO" build --release)
+
+BIN="$SCRIPT_DIR/target/release/archman"
+if [[ ! -x "$BIN" ]]; then
+    echo "  ERROR: build finished but no binary was produced at:"
+    echo "    $BIN"
+    exit 1
+fi
+
+SIZE="$(du -h "$BIN" | cut -f1)"
 echo ""
-read -rp "  Continue? [Y/n] " reply
+echo "  ✔ Build complete: $BIN ($SIZE)"
+echo ""
+
+read -rp "  Install to $INSTALL_BIN? [Y/n] " reply
 if [[ "$reply" =~ ^[Nn] ]]; then
-    echo "  Installation cancelled."
+    echo ""
+    echo "  Skipped installation. Run the binary directly:"
+    echo "    $BIN"
+    echo ""
     exit 0
 fi
 
 echo ""
-echo "  Building..."
-(cd "$SCRIPT_DIR" && "$CARGO" build --release)
-
 echo "  Installing..."
-sudo cp "$SCRIPT_DIR/target/release/archman" "$INSTALL_BIN"
+sudo cp "$BIN" "$INSTALL_BIN"
 sudo chmod 755 "$INSTALL_BIN"
 
 echo ""
