@@ -21,7 +21,7 @@
 ███████║██████╔╝██║     ███████║██╔████╔██║███████║██╔██╗ ██║
 ██╔══██║██╔══██╗██║     ██╔══██║██║╚██╔╝██║██╔══██║██║╚██╗██║
 ██║  ██║██║  ██║╚██████╗██║  ██║██║ ╚═╝ ██║██║  ██║██║ ╚████║
-╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝
+╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
 ```
 
 <p align="center">
@@ -113,30 +113,57 @@ archman --help
 ## 🏗 Project Structure
 
 ```
-src/
-├── main.rs          # entry point: CLI flags, terminal lifecycle
-├── app.rs           # screen stack, modals, event loop, embedded runner
-├── widgets.rs       # logo, menus, fuzzy lists, pagers, theme, cheatsheet
-├── settings.rs      # ~/.config/archman (settings, favorites, log)
-├── sys.rs           # pacman / AUR / reflector wrappers, background jobs
-├── pty.rs           # pseudo-terminal execution for embedded commands
-├── fuzzy.rs         # subsequence fuzzy matcher
-└── screens/
-    ├── registry.rs  # declarative category → action table (the whole UI)
-    ├── home.rs      # two-pane dashboard (sidebar + action pane)
-    ├── runpane.rs   # embedded command runner
-    └── …            # one module per feature (install, mirrors, …)
+pacman-utils/
+├── Cargo.toml            # package manifest — archman, ratatui + crossterm
+├── Cargo.lock            # locked dependency versions
+├── install.sh            # builds (release), then asks to install to /usr/local/bin
+├── snapshot.png          # dashboard screenshot
+├── LICENSE               # GPL-2.0
+└── src/
+    ├── main.rs           # entry point: CLI flags, terminal lifecycle, panic hook
+    ├── app.rs            # App core: screen stack, modals, toasts, event loop, command queue
+    ├── widgets.rs        # logo, menus, fuzzy lists, text viewers, theme helpers, cheatsheet
+    ├── settings.rs       # ~/.config/archman — settings, favorites, activity log
+    ├── sys.rs            # pacman / AUR / reflector wrappers, capability detection, background jobs
+    ├── pty.rs            # pseudo-terminal execution for embedded commands
+    ├── fuzzy.rs          # subsequence fuzzy matcher
+    └── screens/
+        ├── mod.rs           # module registry + shared helpers
+        ├── registry.rs      # declarative category → action table (the whole UI surface)
+        ├── home.rs          # two-pane dashboard (sidebar + action pane)
+        ├── runpane.rs       # embedded command runner pane
+        ├── install.rs       # install packages — fuzzy search, details, review, install
+        ├── search.rs        # search official repos + AUR
+        ├── remove.rs        # remove packages (-R / -Rs / -Rns)
+        ├── packages.rs      # browse, files, owner query, info, history, txn log, reinstall, orphans
+        ├── update.rs        # update check, database refresh, full upgrades
+        ├── lockfile.rs      # inspect / safely remove pacman's db.lck
+        ├── mirrors.rs       # reflector mirror ranking, backup / restore
+        ├── info.rs          # system dashboard
+        ├── settingsscr.rs   # settings editor + dependency check
+        ├── favorites.rs     # favorite packages
+        ├── groups.rs        # curated package groups
+        ├── exportimport.rs  # import package lists
+        └── viewer.rs        # generic scrollable text viewer
 ```
 
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-Run `cargo test` before submitting — the suite covers settings, fuzzy matching, the PTY layer and the runner pane.
+Run `cargo test` before submitting — the suite covers settings, fuzzy matching, the PTY layer and the runner pane. Full guidelines, code conventions and the "adding a feature" walkthrough live in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 🛡 Security
+
+archman runs privileged commands on your system — please report vulnerabilities privately via [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## 📜 Code of Conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By participating, you are expected to uphold it.
 
 ## 📄 License
 
