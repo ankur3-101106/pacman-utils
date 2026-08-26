@@ -146,39 +146,43 @@ ui_confirm() {
 }
 
 # ui_choose "Option A" "Option B" "Option C" → prints selected option
+# Never propagates failure: an aborted chooser (ESC/q) yields an empty result,
+# letting callers treat it via their *"Back"*|"" arms instead of crashing.
 ui_choose() {
+    local selection=""
     if $HAS_GUM; then
-        gum choose --cursor.foreground 33 --selected.foreground 33 "$@"
+        selection=$(gum choose --height=20 --cursor.foreground 33 --selected.foreground 33 "$@") || true
     else
         local i=1
         local options=("$@")
         for opt in "${options[@]}"; do
-            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $opt"
+            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $opt" >&2
             ((i++))
         done
-        echo ""
-        local selection
-        echo -en "${CLR_BOLD}Select: ${CLR_RESET}"
-        read -r selection
-        if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#options[@]} )); then
-            echo "${options[$((selection - 1))]}"
+        echo "" >&2
+        local reply
+        echo -en "${CLR_BOLD}Select: ${CLR_RESET}" >&2
+        read -r reply
+        if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#options[@]} )); then
+            selection="${options[$((reply - 1))]}"
         fi
     fi
+    printf '%s\n' "$selection"
 }
 
 # ui_choose_multi "Option A" "Option B" → prints selected options (one per line)
 ui_choose_multi() {
     if $HAS_GUM; then
-        gum choose --no-limit --cursor.foreground 33 --selected.foreground 33 "$@"
+        gum choose --no-limit --cursor.foreground 33 --selected.foreground 33 "$@" || true
     else
         local i=1
         local options=("$@")
         for opt in "${options[@]}"; do
-            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $opt"
+            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $opt" >&2
             ((i++))
         done
-        echo ""
-        echo -en "${CLR_BOLD}Select (comma-separated, e.g. 1,3,5): ${CLR_RESET}"
+        echo "" >&2
+        echo -en "${CLR_BOLD}Select (comma-separated, e.g. 1,3,5): ${CLR_RESET}" >&2
         local selection
         read -r selection
         IFS=',' read -ra indices <<< "$selection"
@@ -192,56 +196,53 @@ ui_choose_multi() {
 }
 
 # ui_input "placeholder text" → prints user input
+# An aborted prompt (ESC) returns empty output.
 ui_input() {
     local placeholder="${1:-Enter text...}"
     local header="${2:-}"
+    local value=""
     if $HAS_GUM; then
-        if [[ -n "$header" ]]; then
-            gum input --placeholder "$placeholder" --header "$header" --cursor.foreground 33
-        else
-            gum input --placeholder "$placeholder" --cursor.foreground 33
-        fi
+        value=$(gum input --placeholder "$placeholder" --cursor.foreground 33 ${header:+--header "$header"}) || true
     else
-        if [[ -n "$header" ]]; then
-            echo -e "${CLR_BOLD}$header${CLR_RESET}"
-        fi
-        echo -en "${CLR_DIM}($placeholder)${CLR_RESET} > "
-        local value
+        [[ -n "$header" ]] && echo -e "${CLR_BOLD}$header${CLR_RESET}" >&2
+        echo -en "${CLR_DIM}($placeholder)${CLR_RESET} > " >&2
         read -r value
-        echo "$value"
     fi
+    printf '%s\n' "$value"
 }
 
 # ui_filter — pipe a list into this for fuzzy filtering
 # Usage: echo -e "item1\nitem2" | ui_filter "Search..."
+# Never propagates failure: an aborted filter (ESC) yields an empty result.
 ui_filter() {
     local placeholder="${1:-Filter...}"
-    if $HAS_GUM; then
-        gum filter --placeholder "$placeholder" --cursor.foreground 33 --indicator.foreground 33
-    elif $HAS_FZF; then
-        fzf --prompt="$placeholder > " --height=20 --reverse
+    local selection=""
+    if $HAS_FZF; then
+        selection=$(fzf --prompt="$placeholder > " --height=20 --reverse) || true
+    elif $HAS_GUM; then
+        selection=$(gum filter --placeholder "$placeholder" --indicator.foreground 33) || true
     else
-        # Plain fallback: show list, ask user to type
+        # Plain fallback: show list on stderr, ask user to type
         local items=()
         while IFS= read -r line; do
             items+=("$line")
         done
         local i=1
         for item in "${items[@]}"; do
-            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $item"
+            echo -e "  ${CLR_CYAN}$i)${CLR_RESET} $item" >&2
             ((i++))
         done
-        echo ""
-        echo -en "${CLR_BOLD}$placeholder > ${CLR_RESET}"
-        local selection
-        read -r selection
-        # If numeric, return that item; otherwise try grep
-        if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#items[@]} )); then
-            echo "${items[$((selection - 1))]}"
-        else
-            printf '%s\n' "${items[@]}" | grep -i "$selection" | head -1
+        echo "" >&2
+        echo -en "${CLR_BOLD}$placeholder > ${CLR_RESET}" >&2
+        local reply
+        read -r reply
+        if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#items[@]} )); then
+            selection="${items[$((reply - 1))]}"
+        elif [[ -n "$reply" ]]; then
+            selection=$(printf '%s\n' "${items[@]}" | grep -i -- "$reply" | head -1) || true
         fi
     fi
+    printf '%s\n' "$selection"
 }
 
 # ui_spin "Loading..." command arg1 arg2 ...
@@ -281,11 +282,21 @@ ui_pager() {
 # ui_pause — wait for keypress
 ui_pause() {
     echo ""
+    local val=""
     if $HAS_GUM; then
-        gum input --placeholder "Press Enter to continue..." --cursor.foreground 240 > /dev/null 2>&1
+        val=$(gum input --placeholder "Press Enter for main menu, 'q' to quit..." --cursor.foreground 240) || true
     else
-        echo -en "${CLR_DIM}Press Enter to continue...${CLR_RESET}"
-        read -r
+        echo -en "${CLR_DIM}Press Enter for main menu, 'q' to quit...${CLR_RESET}"
+        read -r val
+    fi
+    if [[ "${val,,}" == "q" ]]; then
+        ui_clear
+        if $HAS_GUM; then
+            gum style --foreground 33 --bold --padding "1 2" "Thanks for using archman! 👋"
+        else
+            echo -e "${CLR_CYAN}${CLR_BOLD}Thanks for using archman! 👋${CLR_RESET}"
+        fi
+        exit 0
     fi
 }
 

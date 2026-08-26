@@ -9,8 +9,8 @@ cache_menu() {
 
     # Show current cache info
     local cache_size cache_count
-    cache_size=$(du -sh /var/cache/pacman/pkg/ 2>/dev/null | awk '{print $1}')
-    cache_count=$(find /var/cache/pacman/pkg/ -name '*.pkg.tar.*' 2>/dev/null | wc -l)
+    cache_size=$(du -sh /var/cache/pacman/pkg/ 2>/dev/null | awk '{print $1}' || true)
+    cache_count=$(find /var/cache/pacman/pkg/ -name '*.pkg.tar.*' 2>/dev/null | wc -l || true)
 
     ui_table \
         "Cache Location" "/var/cache/pacman/pkg/" \
@@ -40,23 +40,35 @@ cache_menu() {
             local keep="${SETTINGS[PACCACHE_KEEP]}"
             log_action "CACHE: Keeping last $keep versions"
             if ui_confirm "Remove all but the last $keep versions of each package?"; then
-                sudo paccache -rk"$keep"
-                _show_cache_after
+                if sudo paccache -rk"$keep"; then
+                    _show_cache_after
+                else
+                    ui_error "Cache cleaning failed."
+                    log_action "CACHE: paccache failed"
+                fi
             fi
             ;;
         *"uninstalled"*)
             log_action "CACHE: Removing uninstalled package cache"
             if ui_confirm "Remove all cached packages that are not currently installed?"; then
-                sudo pacman -Sc
-                _show_cache_after
+                if sudo pacman -Sc; then
+                    _show_cache_after
+                else
+                    ui_error "Cache cleaning failed."
+                    log_action "CACHE: pacman -Sc failed"
+                fi
             fi
             ;;
         *"ALL cache"*)
             ui_warn "This will remove ALL cached packages!"
             log_action "CACHE: Removing ALL cache"
             if ui_confirm "Are you absolutely sure? This cannot be undone."; then
-                sudo pacman -Scc
-                _show_cache_after
+                if sudo pacman -Scc; then
+                    _show_cache_after
+                else
+                    ui_error "Cache cleaning failed."
+                    log_action "CACHE: pacman -Scc failed"
+                fi
             fi
             ;;
         *"Back"*|"")
@@ -70,7 +82,7 @@ cache_menu() {
 _show_cache_after() {
     echo ""
     local new_size
-    new_size=$(du -sh /var/cache/pacman/pkg/ 2>/dev/null | awk '{print $1}')
+    new_size=$(du -sh /var/cache/pacman/pkg/ 2>/dev/null | awk '{print $1}' || true)
     ui_success "Cache cleaned! New size: ${new_size:-unknown}"
-    log_action "CACHE: Cache cleaned. New size: $new_size"
+    log_action "CACHE: Cache cleaned. New size: ${new_size:-unknown}"
 }

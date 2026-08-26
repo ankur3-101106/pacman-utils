@@ -53,6 +53,7 @@ groups_menu() {
         ui_header "📦  Package Groups"
 
         # Build menu items
+        
         local items=()
         for group_key in gnome kde hyprland sway i3 dev gaming multimedia networking fonts terminal security; do
             items+=("${GROUP_DESC[$group_key]}")
@@ -175,14 +176,14 @@ _group_do_install() {
 
     if [[ ${#official[@]} -gt 0 ]]; then
         ui_info "Installing ${#official[@]} official packages..."
-        sudo pacman -S --needed "${official[@]}"
+        sudo pacman -S --needed "${official[@]}" || ui_error "Some official packages could not be installed."
     fi
 
     if [[ ${#aur[@]} -gt 0 ]]; then
         local aur_helper
         if aur_helper=$(get_aur_helper); then
             ui_info "Installing ${#aur[@]} AUR packages via $aur_helper..."
-            $aur_helper -S --needed "${aur[@]}"
+            $aur_helper -S --needed "${aur[@]}" || ui_error "Some AUR packages could not be installed."
         else
             ui_warn "Cannot install AUR packages — no AUR helper found:"
             printf '  %s\n' "${aur[@]}"

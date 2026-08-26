@@ -11,8 +11,13 @@ update_menu() {
     ui_info "Checking for updates..."
     echo ""
 
-    local update_count
-    update_count=$(checkupdates 2>/dev/null | wc -l)
+    local update_count=0
+    if command -v checkupdates &>/dev/null; then
+        update_count=$(checkupdates 2>/dev/null | wc -l || true)
+    else
+        ui_dim "checkupdates not available (install pacman-contrib to see pending updates)."
+        echo ""
+    fi
     if [[ "$update_count" -gt 0 ]]; then
         ui_warn "$update_count package update(s) available."
         echo ""
@@ -30,22 +35,33 @@ update_menu() {
     local choice
     choice=$(ui_choose \
         "🔄 Refresh databases only (pacman -Sy)" \
+        "🔄 Force refresh databases (pacman -Syy)" \
         "⬆  Full system upgrade — pacman (pacman -Syu)" \
         "🌟 Full upgrade — AUR + official (yay/paru -Syu)" \
         "🔙 Back to Main Menu"
     )
 
     case "$choice" in
-        *"Refresh databases"*)
+        *"Refresh databases only"*)
             log_action "UPDATE: Refreshing package databases"
             ui_info "Refreshing package databases..."
-            sudo pacman -Sy
-            if [[ $? -eq 0 ]]; then
+            if sudo pacman -Sy; then
                 ui_success "Package databases refreshed!"
                 log_action "UPDATE: Database refresh successful"
             else
                 ui_error "Database refresh failed."
                 log_action "UPDATE: Database refresh failed"
+            fi
+            ;;
+        *"Force refresh databases"*)
+            log_action "UPDATE: Force refreshing package databases"
+            ui_info "Force refreshing package databases..."
+            if sudo pacman -Syy; then
+                ui_success "Package databases force refreshed!"
+                log_action "UPDATE: Force database refresh successful"
+            else
+                ui_error "Force database refresh failed."
+                log_action "UPDATE: Force database refresh failed"
             fi
             ;;
         *"pacman"*)
@@ -57,8 +73,7 @@ update_menu() {
                     return
                 fi
             fi
-            sudo pacman -Syu
-            if [[ $? -eq 0 ]]; then
+            if sudo pacman -Syu; then
                 ui_success "System upgrade complete!"
                 log_action "UPDATE: System upgrade successful"
             else
@@ -77,8 +92,7 @@ update_menu() {
                         return
                     fi
                 fi
-                $aur_helper -Syu
-                if [[ $? -eq 0 ]]; then
+                if $aur_helper -Syu; then
                     ui_success "Full system upgrade complete!"
                     log_action "UPDATE: Full upgrade via $aur_helper successful"
                 else

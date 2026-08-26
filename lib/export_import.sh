@@ -46,12 +46,12 @@ _export_explicit() {
     local count
     count=$(pacman -Qqen | wc -l)
 
-    pacman -Qqen > "$path"
-    if [[ $? -eq 0 ]]; then
+    if pacman -Qqen > "$path"; then
         ui_success "Exported $count explicit packages to $path"
         log_action "EXPORT: $count explicit packages to $path"
     else
-        ui_error "Export failed."
+        ui_error "Export failed — could not write to $path."
+        log_action "EXPORT: failed writing $path"
     fi
     ui_pause
 }
@@ -71,12 +71,12 @@ _export_aur() {
         return
     fi
 
-    pacman -Qqem > "$path"
-    if [[ $? -eq 0 ]]; then
+    if pacman -Qqem > "$path"; then
         ui_success "Exported $count AUR packages to $path"
         log_action "EXPORT: $count AUR packages to $path"
     else
-        ui_error "Export failed."
+        ui_error "Export failed — could not write to $path."
+        log_action "EXPORT: failed writing $path"
     fi
     ui_pause
 }
@@ -86,13 +86,28 @@ _export_all() {
     local explicit_path="${dir}/pkglist-explicit.txt"
     local aur_path="${dir}/pkglist-aur.txt"
 
-    local explicit_count aur_count
+    local explicit_count=0 aur_count=0
+    local failed=false
 
-    pacman -Qqen > "$explicit_path"
-    explicit_count=$(wc -l < "$explicit_path")
+    if pacman -Qqen > "$explicit_path"; then
+        explicit_count=$(wc -l < "$explicit_path")
+    else
+        ui_error "Could not write $explicit_path"
+        failed=true
+    fi
 
-    pacman -Qqem > "$aur_path"
-    aur_count=$(wc -l < "$aur_path")
+    if pacman -Qqem > "$aur_path"; then
+        aur_count=$(wc -l < "$aur_path")
+    else
+        ui_error "Could not write $aur_path"
+        failed=true
+    fi
+
+    if [[ "$failed" == "true" ]]; then
+        log_action "EXPORT: export-all had failures"
+        ui_pause
+        return
+    fi
 
     ui_success "Exported:"
     echo ""
@@ -144,9 +159,13 @@ _import_packages() {
         *"pacman"*)
             if ui_confirm "Install $count packages from $path?"; then
                 log_action "IMPORT: Installing $count packages via pacman"
-                sudo pacman -S --needed - < "$path"
-                ui_success "Import complete!"
-                log_action "IMPORT: Import complete"
+                if sudo pacman -S --needed - < "$path"; then
+                    ui_success "Import complete!"
+                    log_action "IMPORT: Import complete"
+                else
+                    ui_error "Some packages could not be installed."
+                    log_action "IMPORT: Import failed partway"
+                fi
             fi
             ;;
         *"AUR"*)
@@ -154,9 +173,13 @@ _import_packages() {
             if aur_helper=$(get_aur_helper); then
                 if ui_confirm "Install $count packages via $aur_helper?"; then
                     log_action "IMPORT: Installing $count packages via $aur_helper"
-                    $aur_helper -S --needed - < "$path"
-                    ui_success "Import complete!"
-                    log_action "IMPORT: Import complete"
+                    if $aur_helper -S --needed - < "$path"; then
+                        ui_success "Import complete!"
+                        log_action "IMPORT: Import complete"
+                    else
+                        ui_error "Some packages could not be installed."
+                        log_action "IMPORT: Import failed partway"
+                    fi
                 fi
             else
                 ui_error "No AUR helper found."

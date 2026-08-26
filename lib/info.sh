@@ -16,17 +16,18 @@ info_menu() {
     kernel=$(uname -r 2>/dev/null || echo "unknown")
     arch=$(uname -m 2>/dev/null || echo "unknown")
     pacman_ver=$(pacman --version 2>/dev/null | head -1 | grep -oP 'v[\d.]+' || echo "unknown")
-    mirror_count=$(grep -c '^Server' /etc/pacman.d/mirrorlist 2>/dev/null || echo "0")
-    total_pkgs=$(pacman -Q 2>/dev/null | wc -l)
-    explicit_pkgs=$(pacman -Qe 2>/dev/null | wc -l)
-    orphan_pkgs=$(pacman -Qtdq 2>/dev/null | wc -l)
+    mirror_count=$(grep -c '^Server' /etc/pacman.d/mirrorlist 2>/dev/null || true)
+    mirror_count="${mirror_count:-0}"
+    total_pkgs=$(pacman -Q 2>/dev/null | wc -l || true)
+    explicit_pkgs=$(pacman -Qe 2>/dev/null | wc -l || true)
+    orphan_pkgs=$(pacman -Qtdq 2>/dev/null | wc -l || true)
     cache_size=$(du -sh /var/cache/pacman/pkg/ 2>/dev/null | awk '{print $1}' || echo "unknown")
     disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {printf "%s / %s (%s used)", $3, $2, $5}')
     uptime_info=$(uptime -p 2>/dev/null || echo "unknown")
 
     # AUR stats
     local aur_pkgs aur_helper_info
-    aur_pkgs=$(pacman -Qm 2>/dev/null | wc -l)
+    aur_pkgs=$(pacman -Qm 2>/dev/null | wc -l || true)
     local aur_helper
     if aur_helper=$(get_aur_helper); then
         aur_helper_info="$aur_helper ($($aur_helper --version 2>/dev/null | head -1))"

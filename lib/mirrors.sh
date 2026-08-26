@@ -13,7 +13,7 @@ mirrors_menu() {
 
         # Show current mirror stats
         local mirror_count
-        mirror_count=$(grep -c '^Server' "$MIRRORLIST" 2>/dev/null)
+        mirror_count=$(grep -c '^Server' "$MIRRORLIST" 2>/dev/null || true)
         ui_table \
             "Mirrorlist"   "$MIRRORLIST" \
             "Active Mirrors" "${mirror_count:-0}" \
@@ -73,35 +73,39 @@ _mirrors_ensure_reflector() {
 _mirrors_reflector_auto() {
     _mirrors_ensure_reflector || { ui_pause; return; }
 
+    local country
+    country=$(ui_input "Country name or code (leave blank for global)" "Select Country")
+    local country_args=()
+    if [[ -n "$country" ]]; then
+        country_args=("--country" "$country")
+    fi
+
     ui_info "Updating mirrorlist with reflector..."
-    ui_info "Using: --country auto --latest 20 --sort rate"
+    if [[ -n "$country" ]]; then
+        ui_info "Using: --country '$country' --latest 20 --sort rate"
+    else
+        ui_info "Using: --latest 20 --sort rate"
+    fi
     echo ""
 
-    # Backup first
-    sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP" 2>/dev/null
+    # Ensure sudo is authenticated
+    sudo -v || { ui_error "sudo authentication failed"; ui_pause; return 1; }
+
+    # Backup first (best-effort)
+    sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP" 2>/dev/null || true
 
     log_action "MIRRORS: Auto-updating mirrors with reflector"
 
-    if $HAS_GUM; then
-        gum spin --spinner dot --title "Fetching and ranking mirrors..." -- \
-            sudo reflector \
-                --country auto \
-                --latest 20 \
-                --sort rate \
-                --save "$MIRRORLIST"
-    else
-        sudo reflector \
-            --country auto \
+    if ui_spin "Fetching and ranking mirrors..." \
+        sudo reflector "${country_args[@]}" \
             --latest 20 \
             --sort rate \
             --save "$MIRRORLIST"
-    fi
-
-    if [[ $? -eq 0 ]]; then
+    then
         local new_count
-        new_count=$(grep -c '^Server' "$MIRRORLIST" 2>/dev/null)
-        ui_success "Mirrorlist updated! ($new_count mirrors)"
-        log_action "MIRRORS: Updated to $new_count mirrors"
+        new_count=$(grep -c '^Server' "$MIRRORLIST" 2>/dev/null || true)
+        ui_success "Mirrorlist updated! (${new_count:-0} mirrors)"
+        log_action "MIRRORS: Updated to ${new_count:-0} mirrors"
     else
         ui_error "reflector failed. Restoring backup..."
         if [[ -f "$MIRRORLIST_BACKUP" ]]; then
@@ -117,27 +121,34 @@ _mirrors_reflector_auto() {
 _mirrors_rank_fastest() {
     _mirrors_ensure_reflector || { ui_pause; return; }
 
+    local country
+    country=$(ui_input "Country name or code (leave blank for global)" "Select Country")
+    local country_args=()
+    if [[ -n "$country" ]]; then
+        country_args=("--country" "$country")
+    fi
+
     ui_info "Ranking the 10 fastest mirrors..."
+    if [[ -n "$country" ]]; then
+        ui_info "Using: --country '$country' --latest 10 --sort rate"
+    else
+        ui_info "Using: --latest 10 --sort rate"
+    fi
     echo ""
 
-    sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP" 2>/dev/null
+    # Ensure sudo is authenticated
+    sudo -v || { ui_error "sudo authentication failed"; ui_pause; return 1; }
+
+    sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP" 2>/dev/null || true
 
     log_action "MIRRORS: Ranking fastest mirrors"
 
-    if $HAS_GUM; then
-        gum spin --spinner dot --title "Testing mirror speeds..." -- \
-            sudo reflector \
-                --latest 10 \
-                --sort rate \
-                --save "$MIRRORLIST"
-    else
-        sudo reflector \
+    if ui_spin "Testing mirror speeds..." \
+        sudo reflector "${country_args[@]}" \
             --latest 10 \
             --sort rate \
             --save "$MIRRORLIST"
-    fi
-
-    if [[ $? -eq 0 ]]; then
+    then
         ui_success "Mirrorlist updated with fastest mirrors!"
         log_action "MIRRORS: Ranked fastest mirrors"
     else
@@ -169,8 +180,7 @@ _mirrors_show_current() {
 
 _mirrors_backup() {
     log_action "MIRRORS: Backing up mirrorlist"
-    sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP"
-    if [[ $? -eq 0 ]]; then
+    if sudo cp "$MIRRORLIST" "$MIRRORLIST_BACKUP"; then
         ui_success "Mirrorlist backed up to $MIRRORLIST_BACKUP"
         log_action "MIRRORS: Backup successful"
     else

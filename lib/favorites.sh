@@ -91,10 +91,11 @@ _fav_remove() {
     selected=$(cat "$FAVORITES_FILE" | ui_filter "Select package to remove...")
 
     if [[ -n "$selected" ]]; then
-        # Remove from file
+        # Remove from file. grep exits 1 when the selection was the only
+        # favorite (empty result is expected), hence the status guard.
         local tmp
         tmp=$(mktemp)
-        grep -vx "$selected" "$FAVORITES_FILE" > "$tmp"
+        grep -vx -- "$selected" "$FAVORITES_FILE" > "$tmp" || true
         mv "$tmp" "$FAVORITES_FILE"
         ui_success "Removed $selected from favorites."
         log_action "FAVORITES: Removed $selected"
@@ -128,7 +129,7 @@ _fav_install_all() {
         # Install official
         if [[ ${#official[@]} -gt 0 ]]; then
             ui_info "Installing ${#official[@]} official packages..."
-            sudo pacman -S --needed "${official[@]}"
+            sudo pacman -S --needed "${official[@]}" || ui_error "Some official packages could not be installed."
         fi
 
         # Install AUR
@@ -136,7 +137,7 @@ _fav_install_all() {
             local aur_helper
             if aur_helper=$(get_aur_helper); then
                 ui_info "Installing ${#aur[@]} AUR packages via $aur_helper..."
-                $aur_helper -S --needed "${aur[@]}"
+                $aur_helper -S --needed "${aur[@]}" || ui_error "Some AUR packages could not be installed."
             else
                 ui_warn "Skipping ${#aur[@]} AUR packages — no AUR helper found."
             fi
@@ -189,13 +190,13 @@ _fav_install_missing() {
         done
 
         if [[ ${#official[@]} -gt 0 ]]; then
-            sudo pacman -S --needed "${official[@]}"
+            sudo pacman -S --needed "${official[@]}" || ui_error "Some official packages could not be installed."
         fi
 
         if [[ ${#aur[@]} -gt 0 ]]; then
             local aur_helper
             if aur_helper=$(get_aur_helper); then
-                $aur_helper -S --needed "${aur[@]}"
+                $aur_helper -S --needed "${aur[@]}" || ui_error "Some AUR packages could not be installed."
             else
                 ui_warn "Skipping AUR packages — no AUR helper."
             fi

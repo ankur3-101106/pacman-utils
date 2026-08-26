@@ -70,6 +70,7 @@ main_menu() {
             "🔍 Search Packages" \
             "📋 Package Utilities" \
             "⬆  System Update" \
+            "🔄 Refresh Databases (-Syy)" \
             "🧹 Clean Package Cache" \
             "🔒 Remove pacman db.lck" \
             "🌍 Refresh Mirrors" \
@@ -96,6 +97,20 @@ main_menu() {
                 ;;
             *"System Update"*)
                 update_menu
+                ;;
+            *"Refresh Databases"*)
+                log_action "UPDATE: Force refreshing package databases from main menu"
+                ui_clear
+                ui_header "🔄  Refresh Databases"
+                ui_info "Force refreshing package databases..."
+                if sudo pacman -Syy; then
+                    ui_success "Package databases force refreshed!"
+                    log_action "UPDATE: Force database refresh successful"
+                else
+                    ui_error "Force database refresh failed."
+                    log_action "UPDATE: Force database refresh failed"
+                fi
+                ui_pause
                 ;;
             *"Clean Package Cache"*)
                 cache_menu

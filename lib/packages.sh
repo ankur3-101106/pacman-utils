@@ -118,8 +118,7 @@ _pkg_remove_orphans() {
     if ui_confirm "Remove all orphan packages?"; then
         log_action "PACKAGES: Removing $count orphan packages"
         # shellcheck disable=SC2086
-        sudo pacman -Rns $orphans
-        if [[ $? -eq 0 ]]; then
+        if sudo pacman -Rns $orphans; then
             ui_success "Orphan packages removed!"
             log_action "PACKAGES: Orphan removal successful"
         else
@@ -178,9 +177,7 @@ _pkg_find_owner() {
     fi
 
     local result
-    result=$(pacman -Qo "$filepath" 2>&1)
-
-    if [[ $? -eq 0 ]]; then
+    if result=$(pacman -Qo "$filepath" 2>&1); then
         ui_success "$result"
     else
         ui_error "No package owns '$filepath'"
@@ -213,7 +210,7 @@ _pkg_show_info_for() {
 
     # Try local info first (installed packages)
     local info
-    info=$(pacman -Qi "$pkg_name" 2>/dev/null)
+    info=$(pacman -Qi "$pkg_name" 2>/dev/null || true)
     if [[ -n "$info" ]]; then
         ui_success "Installed package:"
         echo ""
@@ -227,7 +224,7 @@ _pkg_show_info_for() {
     fi
 
     # Try repo info
-    info=$(pacman -Si "$pkg_name" 2>/dev/null)
+    info=$(pacman -Si "$pkg_name" 2>/dev/null || true)
     if [[ -n "$info" ]]; then
         ui_info "Available in repository:"
         echo ""
@@ -243,7 +240,7 @@ _pkg_show_info_for() {
     # Try AUR
     local aur_helper
     if aur_helper=$(get_aur_helper); then
-        info=$($aur_helper -Si "$pkg_name" 2>/dev/null)
+        info=$($aur_helper -Si "$pkg_name" 2>/dev/null || true)
         if [[ -n "$info" ]]; then
             ui_info "Available in AUR:"
             echo ""
@@ -358,8 +355,7 @@ _pkg_reinstall() {
 
     if ui_confirm "Reinstall $pkg_name?"; then
         log_action "PACKAGES: Reinstalling $pkg_name"
-        sudo pacman -S --overwrite '*' "$pkg_name"
-        if [[ $? -eq 0 ]]; then
+        if sudo pacman -S --overwrite '*' "$pkg_name"; then
             ui_success "$pkg_name reinstalled!"
             log_action "PACKAGES: $pkg_name reinstalled successfully"
         else

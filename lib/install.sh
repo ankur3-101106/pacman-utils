@@ -7,17 +7,24 @@ install_menu() {
     ui_clear
     ui_header "📦  Install Package"
 
+    local list_cmd="pacman -Slq"
+    local aur_helper
+    if aur_helper=$(get_aur_helper); then
+        list_cmd="$aur_helper -Slq"
+    fi
+
+    ui_info "Fetching available packages..."
     local pkg
-    pkg=$(ui_input "Package name..." "Enter package to install")
+    pkg=$($list_cmd 2>/dev/null | ui_filter "Select package to install..." || true)
 
     # Empty input
     if [[ -z "$pkg" ]]; then
-        ui_warn "No package name entered."
+        ui_warn "No package selected."
         ui_pause
         return
     fi
 
-    log_action "INSTALL: Searching for '$pkg'"
+    log_action "INSTALL: Selected '$pkg'"
 
     # ── Check official repositories ──────────────────────────────────
     ui_info "Searching official repositories..."
@@ -36,7 +43,7 @@ install_menu() {
         # Dry-run check
         if [[ "${SETTINGS[DRY_RUN]}" == "true" ]]; then
             ui_info "Dry-run mode: showing what would be installed..."
-            sudo pacman -S --print "$pkg"
+            sudo pacman -S --print "$pkg" || ui_error "Could not resolve $pkg for installation."
             echo ""
             if ! ui_confirm "Proceed with actual install?"; then
                 ui_info "Installation cancelled."
@@ -48,8 +55,7 @@ install_menu() {
         if ui_confirm "Install $pkg?"; then
             echo ""
             log_action "INSTALL: Installing $pkg from official repos"
-            sudo pacman -S "$pkg"
-            if [[ $? -eq 0 ]]; then
+            if sudo pacman -S "$pkg"; then
                 ui_success "$pkg installed successfully!"
                 log_action "INSTALL: $pkg installed successfully"
             else
@@ -82,8 +88,7 @@ install_menu() {
             if ui_confirm "Install $pkg from AUR?"; then
                 echo ""
                 log_action "INSTALL: Installing $pkg from AUR via $aur_helper"
-                $aur_helper -S "$pkg"
-                if [[ $? -eq 0 ]]; then
+                if $aur_helper -S "$pkg"; then
                     ui_success "$pkg installed successfully!"
                     log_action "INSTALL: $pkg installed successfully from AUR"
                 else
@@ -168,12 +173,24 @@ install_specific_package() {
 
     if pacman -Si "$pkg" &>/dev/null; then
         log_action "INSTALL: Installing $pkg from official repos"
-        sudo pacman -S "$pkg"
+        if sudo pacman -S "$pkg"; then
+            ui_success "$pkg installed successfully!"
+            log_action "INSTALL: $pkg installed successfully"
+        else
+            ui_error "Installation of $pkg failed."
+            log_action "INSTALL: $pkg installation failed"
+        fi
     else
         local aur_helper
         if aur_helper=$(get_aur_helper); then
             log_action "INSTALL: Installing $pkg from AUR via $aur_helper"
-            $aur_helper -S "$pkg"
+            if $aur_helper -S "$pkg"; then
+                ui_success "$pkg installed successfully!"
+                log_action "INSTALL: $pkg installed successfully from AUR"
+            else
+                ui_error "Installation of $pkg failed."
+                log_action "INSTALL: $pkg AUR installation failed"
+            fi
         else
             ui_error "Cannot install $pkg — no AUR helper found."
         fi

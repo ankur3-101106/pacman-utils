@@ -189,22 +189,23 @@ settings_change_aur_helper() {
         else
             ui_error "$choice is not installed."
             if ui_confirm "Install $choice?"; then
-                if [[ "$choice" == "yay" ]]; then
-                    sudo pacman -S --needed git base-devel --noconfirm
+                local build_ok=false
+                if sudo pacman -S --needed git base-devel --noconfirm; then
                     local tmpdir
                     tmpdir=$(mktemp -d)
-                    git clone https://aur.archlinux.org/yay.git "$tmpdir/yay"
-                    (cd "$tmpdir/yay" && makepkg -si --noconfirm)
+                    local repo_url="https://aur.archlinux.org/$choice.git"
+                    if git clone "$repo_url" "$tmpdir/$choice"; then
+                        if (cd "$tmpdir/$choice" && makepkg -si --noconfirm); then
+                            build_ok=true
+                        fi
+                    else
+                        ui_error "Could not clone $repo_url"
+                    fi
                     rm -rf "$tmpdir"
                 else
-                    sudo pacman -S --needed git base-devel --noconfirm
-                    local tmpdir
-                    tmpdir=$(mktemp -d)
-                    git clone https://aur.archlinux.org/paru.git "$tmpdir/paru"
-                    (cd "$tmpdir/paru" && makepkg -si --noconfirm)
-                    rm -rf "$tmpdir"
+                    ui_error "Failed to install build dependencies (git, base-devel)."
                 fi
-                if command -v "$choice" &>/dev/null; then
+                if [[ "$build_ok" == "true" ]] && command -v "$choice" &>/dev/null; then
                     SETTINGS[AUR_HELPER]="$choice"
                     AUR_HELPER="$choice"
                     settings_save

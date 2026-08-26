@@ -21,7 +21,7 @@ remove_menu() {
     echo ""
 
     local selected
-    selected=$(echo "$packages" | ui_filter "Search installed packages...")
+    selected=$(echo "$packages" | ui_filter "Search installed packages..." || true)
 
     if [[ -z "$selected" ]]; then
         ui_info "No package selected."
