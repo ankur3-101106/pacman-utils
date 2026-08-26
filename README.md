@@ -69,7 +69,7 @@ Commands never take over your terminal. They run on a pseudo-terminal **inside t
 
 ## 📦 Installation
 
-**Via GitHub Releases (Pre-compiled Binary):**
+**1. Via GitHub Releases (Pre-compiled Binary):**
 
 Download the latest `archman` binary from the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page, make it executable, and move it to your PATH:
 
@@ -78,19 +78,12 @@ chmod +x archman
 sudo mv archman /usr/local/bin/
 ```
 
-**Build from Source:**
+**2. Build from Source:**
 
 ```bash
 git clone https://github.com/ankur3-101106/pacman-utils.git
 cd pacman-utils
 ./install.sh          # builds with cargo, then asks whether to install to /usr/local/bin
-```
-
-Manual build:
-
-```bash
-cargo build --release
-sudo cp target/release/archman /usr/local/bin/
 ```
 
 ## 🔧 Dependencies
@@ -117,7 +110,9 @@ Everything lives in `~/.config/archman/` (created on first launch, same format s
 
 ```bash
 archman              # launch the dashboard
+
 archman --version
+
 archman --help
 ```
 
@@ -170,7 +165,7 @@ Run `cargo test` before submitting — the suite covers settings, fuzzy matching
 
 ## 🛡 Security
 
-archman runs privileged commands on your system — please report vulnerabilities privately via [SECURITY.md](SECURITY.md) instead of opening a public issue.
+`archman` runs privileged commands on your system — please report vulnerabilities privately via [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## 📜 Code of Conduct
 
