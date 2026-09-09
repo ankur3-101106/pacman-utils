@@ -38,8 +38,16 @@ impl LockfileScreen {
 
     fn refresh_state(mut self) -> Self {
         self.exists = std::path::Path::new(LOCK_FILE).exists();
-        self.info = if self.exists { sys::lockfile_info() } else { None };
-        self.pids = if self.exists { sys::pacman_pids() } else { Vec::new() };
+        self.info = if self.exists {
+            sys::lockfile_info()
+        } else {
+            None
+        };
+        self.pids = if self.exists {
+            sys::pacman_pids()
+        } else {
+            Vec::new()
+        };
         self
     }
 }
@@ -50,16 +58,30 @@ impl Default for LockfileScreen {
     }
 }
 
+impl LockfileScreen {
+    fn execute_remove(&self, app: &mut App) {
+        app.log(&format!("LOCKFILE: Removing {LOCK_FILE}"));
+        app.queue_ext(
+            ExtCmd::new("lockfile-rm", "sudo", &args(&["rm", "-f", LOCK_FILE]))
+                .note("Remove pacman lock file")
+                .result(
+                    "Lock file removed successfully.",
+                    "Failed to remove lock file.",
+                    "LOCKFILE: finished",
+                ),
+        );
+    }
+}
+
 impl Screen for LockfileScreen {
     fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
         match key.code {
-            KeyCode::Enter if self.exists && self.pids.is_empty() => {
-                app.confirm("Remove lock file?", true);
-            }
             KeyCode::Enter if self.exists => {
-                // Pacman running: still allow, matching bash behavior of
-                // showing the confirm after strong warnings.
-                app.confirm("Remove lock file?", true);
+                if app.settings().is_true("CONFIRM_ACTIONS") {
+                    app.confirm("Remove lock file?", true);
+                } else {
+                    self.execute_remove(app);
+                }
             }
             KeyCode::Esc | KeyCode::Char('q') => app.pop(),
             _ => {}
@@ -78,7 +100,10 @@ impl Screen for LockfileScreen {
                 widgets::success(),
             )));
         } else {
-            lines.push(Line::from(widgets::span("⚠ Lock file exists!", widgets::warning())));
+            lines.push(Line::from(widgets::span(
+                "⚠ Lock file exists!",
+                widgets::warning(),
+            )));
             lines.push(Line::from(""));
 
             // Key/value table rendered inline.
@@ -107,7 +132,10 @@ impl Screen for LockfileScreen {
 
             if !self.pids.is_empty() {
                 lines.push(Line::from(widgets::span(
-                    format!("✘ WARNING: pacman appears to be running! PID(s): {}", self.pids.join(" ")),
+                    format!(
+                        "✘ WARNING: pacman appears to be running! PID(s): {}",
+                        self.pids.join(" ")
+                    ),
                     widgets::danger(),
                 )));
                 lines.push(Line::from(widgets::span(
@@ -115,14 +143,19 @@ impl Screen for LockfileScreen {
                     widgets::danger(),
                 )));
                 lines.push(Line::from(""));
-                lines.push(Line::from(widgets::span("enter remove anyway · esc back", widgets::warning())));
+                lines.push(Line::from(widgets::span(
+                    "enter remove anyway · esc back",
+                    widgets::warning(),
+                )));
             } else {
-                lines.push(Line::from(widgets::span("enter remove lock file · esc back", widgets::accent())));
+                lines.push(Line::from(widgets::span(
+                    "enter remove lock file · esc back",
+                    widgets::accent(),
+                )));
             }
         }
 
-        let rows =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
         f.render_widget(Paragraph::new(lines), rows[1]);
     }
 
@@ -139,16 +172,7 @@ impl Screen for LockfileScreen {
             app.toast("Lock file kept.", Sev::Info);
             return;
         }
-        app.log(&format!("LOCKFILE: Removing {LOCK_FILE}"));
-        app.queue_ext(
-            ExtCmd::new("lockfile-rm", "sudo", &args(&["rm", "-f", LOCK_FILE]))
-                .note("Remove pacman lock file")
-                .result(
-                    "Lock file removed successfully.",
-                    "Failed to remove lock file.",
-                    "LOCKFILE: finished",
-                ),
-        );
+        self.execute_remove(app);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, _ok: bool) {

@@ -20,7 +20,7 @@ use crate::app::{App, Screen};
 use crate::sys::{self, Job, SysBrief};
 use crate::widgets;
 
-use super::registry::{CATEGORIES, Launch, RunSpec};
+use super::registry::{Launch, RunSpec, CATEGORIES};
 
 /// One searchable entry per action across all categories.
 struct IndexEntry {
@@ -194,7 +194,11 @@ impl Screen for HomeScreen {
         // ── Search mode captures typing first ──
         if self.search_active {
             match key.code {
-                Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                Char(c)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
                     self.query.push(c);
                     self.refilter();
                     self.sync_search_offset();
@@ -235,12 +239,10 @@ impl Screen for HomeScreen {
         match key.code {
             Char('?') => {
                 app.toggle_help();
-                return;
             }
             Char('q') => app.quit_app(),
             Char('/') => {
                 self.search_active = true;
-                return;
             }
             Up | Char('k') => {
                 self.action = self.action.saturating_sub(1);
@@ -361,7 +363,12 @@ impl Screen for HomeScreen {
             let start = self.act_offset.min(self.matches.len());
             for &mi in self.matches.iter().skip(start).take(act_rows) {
                 let e = &self.index[mi];
-                let sel = mi == self.matches.get(self.search_sel).copied().unwrap_or(usize::MAX);
+                let sel = mi
+                    == self
+                        .matches
+                        .get(self.search_sel)
+                        .copied()
+                        .unwrap_or(usize::MAX);
                 let style = if sel {
                     widgets::selected_style(widgets::cat_color(e.cat))
                 } else {
@@ -371,15 +378,15 @@ impl Screen for HomeScreen {
                 act_lines.push(Line::from(vec![
                     widgets::span(cursor.to_string(), widgets::cat_style(e.cat)),
                     Span::styled(e.label.clone(), style),
-                    widgets::span(
-                        format!("  {}", CATEGORIES[e.cat].title),
-                        widgets::dim(),
-                    ),
+                    widgets::span(format!("  {}", CATEGORIES[e.cat].title), widgets::dim()),
                 ]));
             }
         } else {
             let acts = CATEGORIES[self.cat].actions;
-            desc = acts.get(self.action).map(|a| a.desc).unwrap_or("No actions in this category.");
+            desc = acts
+                .get(self.action)
+                .map(|a| a.desc)
+                .unwrap_or("No actions in this category.");
             for (i, a) in acts.iter().enumerate().skip(self.act_offset) {
                 if act_lines.len() >= act_rows {
                     break;
@@ -392,7 +399,10 @@ impl Screen for HomeScreen {
                 };
                 let cursor = if sel { "▸ " } else { "  " };
                 act_lines.push(Line::from(vec![
-                    widgets::span(cursor.to_string(), widgets::selected_style(widgets::cat_color(self.cat))),
+                    widgets::span(
+                        cursor.to_string(),
+                        widgets::selected_style(widgets::cat_color(self.cat)),
+                    ),
                     Span::styled(a.label.to_string(), style),
                 ]));
             }
@@ -400,11 +410,7 @@ impl Screen for HomeScreen {
 
         // Actions pane with the description on its bottom border.
         let title = if searching {
-            format!(
-                "Search: {} ({} matches)",
-                self.query,
-                self.matches.len()
-            )
+            format!("Search: {} ({} matches)", self.query, self.matches.len())
         } else {
             CATEGORIES[self.cat].title.to_string()
         };
@@ -424,7 +430,9 @@ impl Screen for HomeScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(spec) = self.pending_run.take() else { return };
+        let Some(spec) = self.pending_run.take() else {
+            return;
+        };
         if !yes {
             app.toast("Cancelled.", widgets::Sev::Info);
             app.log(&format!("{} cancelled", spec.tag));

@@ -14,11 +14,15 @@ pub struct ViewerScreen {
 
 impl ViewerScreen {
     pub fn new(title: impl Into<String>, lines: Vec<Vec<Span<'static>>>) -> Box<Self> {
-        Box::new(Self { viewer: TextViewer::new_styled(title, lines) })
+        Box::new(Self {
+            viewer: TextViewer::new_styled(title, lines),
+        })
     }
 
     pub fn from_text(title: impl Into<String>, text: &str) -> Box<Self> {
-        Box::new(Self { viewer: TextViewer::from_text(title, text) })
+        Box::new(Self {
+            viewer: TextViewer::from_text(title, text),
+        })
     }
 }
 

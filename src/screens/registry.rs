@@ -62,19 +62,24 @@ fn confirm_upgrade_aur(app: &App) -> Option<String> {
         .then(|| "Perform full upgrade (official + AUR) via your AUR helper?".to_string())
 }
 
-fn confirm_sc(_: &App) -> Option<String> {
-    Some("Remove all cached packages that are not currently installed?".into())
+fn confirm_sc(app: &App) -> Option<String> {
+    app.settings()
+        .is_true("CONFIRM_ACTIONS")
+        .then(|| "Remove all cached packages that are not currently installed?".into())
 }
 
-fn confirm_scc(_: &App) -> Option<String> {
-    Some(
+fn confirm_scc(app: &App) -> Option<String> {
+    app.settings().is_true("CONFIRM_ACTIONS").then(|| {
         "This will remove ALL cached packages! \
          Are you absolutely sure? This cannot be undone."
-            .into(),
-    )
+            .into()
+    })
 }
 
 fn confirm_paccache(app: &App) -> Option<String> {
+    if !app.settings().is_true("CONFIRM_ACTIONS") {
+        return None;
+    }
     let keep = app.settings().get("PACCACHE_KEEP");
     Some(format!(
         "Remove all but the last {keep} versions of each package?"
@@ -84,32 +89,31 @@ fn confirm_paccache(app: &App) -> Option<String> {
 // ── Run builders ────────────────────────────────────────────────────
 
 fn build_db_sy(app: &mut App) {
-    app.queue_ext(
-        ExtCmd::new("run-db-sy", "sudo", &super::args(&["pacman", "-Sy"]))
-            .note("Refreshing package databases"),
-    );
+    let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-Sy"]);
+    app.queue_ext(ExtCmd::new("run-db-sy", "sudo", &cmd_args).note("Refreshing package databases"));
 }
 
 fn build_db_syy(app: &mut App) {
+    let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-Syy"]);
     app.queue_ext(
-        ExtCmd::new("run-db-syy", "sudo", &super::args(&["pacman", "-Syy"]))
-            .note("Force refreshing package databases"),
+        ExtCmd::new("run-db-syy", "sudo", &cmd_args).note("Force refreshing package databases"),
     );
 }
 
 fn build_upgrade_pacman(app: &mut App) {
-    app.queue_ext(
-        ExtCmd::new("run-upgrade", "sudo", &super::args(&["pacman", "-Syu"]))
-            .note("Full system upgrade"),
-    );
+    let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-Syu"]);
+    app.queue_ext(ExtCmd::new("run-upgrade", "sudo", &cmd_args).note("Full system upgrade"));
 }
 
 fn build_upgrade_aur(app: &mut App) {
     match crate::sys::get_aur_helper(app.settings()) {
-        Some(helper) => app.queue_ext(
-            ExtCmd::new("run-upgrade-aur", &helper, &super::args(&["-Syu"]))
-                .note(format!("Full upgrade via {helper}")),
-        ),
+        Some(helper) => {
+            let cmd_args = crate::sys::aur_args(app.settings(), &["-Syu"]);
+            app.queue_ext(
+                ExtCmd::new("run-upgrade-aur", &helper, &cmd_args)
+                    .note(format!("Full upgrade via {helper}")),
+            );
+        }
         None => {
             app.toast(
                 "No AUR helper found. Install yay or paru (Settings ▸ Dependency Check).",
@@ -142,22 +146,27 @@ fn build_cache_keep(app: &mut App) {
 }
 
 fn build_cache_sc(app: &mut App) {
+    let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-Sc"]);
     app.queue_ext(
-        ExtCmd::new("run-cache-sc", "sudo", &super::args(&["pacman", "-Sc"]))
+        ExtCmd::new("run-cache-sc", "sudo", &cmd_args)
             .note("Remove cached packages for uninstalled software"),
     );
 }
 
 fn build_cache_scc(app: &mut App) {
+    let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-Scc"]);
     app.queue_ext(
-        ExtCmd::new("run-cache-scc", "sudo", &super::args(&["pacman", "-Scc"]))
-            .note("Remove ALL cached packages"),
+        ExtCmd::new("run-cache-scc", "sudo", &cmd_args).note("Remove ALL cached packages"),
     );
 }
 
 fn write_list(path: &std::path::Path, names: Vec<String>) -> Result<usize, String> {
     let count = names.len();
-    let body = if names.is_empty() { String::new() } else { names.join("\n") + "\n" };
+    let body = if names.is_empty() {
+        String::new()
+    } else {
+        names.join("\n") + "\n"
+    };
     std::fs::write(path, body).map_err(|e| e.to_string())?;
     Ok(count)
 }
@@ -167,8 +176,14 @@ fn build_export_explicit(app: &mut App) {
     let names = crate::sys::explicit_names();
     match write_list(&path, names) {
         Ok(n) => {
-            app.toast(format!("Exported {n} explicit packages → {}", path.display()), crate::widgets::Sev::Success);
-            app.log(&format!("EXPORT: {n} explicit packages to {}", path.display()));
+            app.toast(
+                format!("Exported {n} explicit packages → {}", path.display()),
+                crate::widgets::Sev::Success,
+            );
+            app.log(&format!(
+                "EXPORT: {n} explicit packages to {}",
+                path.display()
+            ));
         }
         Err(e) => app.toast(format!("Export failed: {e}"), crate::widgets::Sev::Error),
     }
@@ -183,7 +198,10 @@ fn build_export_aur(app: &mut App) {
     }
     match write_list(&path, names) {
         Ok(n) => {
-            app.toast(format!("Exported {n} AUR packages → {}", path.display()), crate::widgets::Sev::Success);
+            app.toast(
+                format!("Exported {n} AUR packages → {}", path.display()),
+                crate::widgets::Sev::Success,
+            );
             app.log(&format!("EXPORT: {n} AUR packages to {}", path.display()));
         }
         Err(e) => app.toast(format!("Export failed: {e}"), crate::widgets::Sev::Error),
@@ -302,159 +320,300 @@ macro_rules! run_spec {
 // parses `run = run_spec!(…)` as an assignment expression.
 macro_rules! action {
     ($label:expr, $desc:expr, run = $spec:expr) => {
-        ActionDef { label: $label, desc: $desc, launch: Launch::Run($spec) }
+        ActionDef {
+            label: $label,
+            desc: $desc,
+            launch: Launch::Run($spec),
+        }
     };
     ($label:expr, $desc:expr, $open:expr) => {
-        ActionDef { label: $label, desc: $desc, launch: Launch::Screen($open) }
+        ActionDef {
+            label: $label,
+            desc: $desc,
+            launch: Launch::Screen($open),
+        }
     };
 }
 
 pub static PACKAGES: [ActionDef; 15] = [
-    action!("Install Package",
+    action!(
+        "Install Package",
         "Fuzzy-search every repository and AUR package, review details, install.",
-        open::install),
-    action!("Search Packages",
+        open::install
+    ),
+    action!(
+        "Search Packages",
         "Search official repos and the AUR, then jump straight into installing.",
-        open::search),
-    action!("Remove Package",
+        open::search
+    ),
+    action!(
+        "Remove Package",
         "Uninstall an explicitly installed package (-R, -Rs or -Rns).",
-        open::remove),
-    action!("Browse Installed Packages",
+        open::remove
+    ),
+    action!(
+        "Browse Installed Packages",
         "Browse everything installed and inspect full package details.",
-        open::browse_installed),
-    action!("Browse Explicit Packages",
+        open::browse_installed
+    ),
+    action!(
+        "Browse Explicit Packages",
         "Browse only the packages you deliberately installed.",
-        open::browse_explicit),
-    action!("Files Owned by Package",
+        open::browse_explicit
+    ),
+    action!(
+        "Files Owned by Package",
         "List every file that belongs to an installed package.",
-        open::files_pick),
-    action!("Which Package Owns a File?",
+        open::files_pick
+    ),
+    action!(
+        "Which Package Owns a File?",
         "Trace an absolute path back to the package that installed it.",
-        open::owner_query),
-    action!("Package Info Lookup",
+        open::owner_query
+    ),
+    action!(
+        "Package Info Lookup",
         "Detailed information for any package — local database, repos or AUR.",
-        open::pkg_info),
-    action!("Installation History",
+        open::pkg_info
+    ),
+    action!(
+        "Installation History",
         "Recent installed / upgraded / removed events from pacman.log.",
-        open::history),
-    action!("Transaction Log Viewer",
+        open::history
+    ),
+    action!(
+        "Transaction Log Viewer",
         "Browse pacman.log filtered by installs, upgrades, removals or errors.",
-        open::txn_log),
-    action!("Reinstall Package",
+        open::txn_log
+    ),
+    action!(
+        "Reinstall Package",
         "Force-reinstall a package, overwriting any modified files.",
-        open::reinstall),
-    action!("Remove Orphan Packages",
+        open::reinstall
+    ),
+    action!(
+        "Remove Orphan Packages",
         "Detect dependencies no longer needed and remove them all.",
-        open::orphans),
-    action!("Export Explicit List",
+        open::orphans
+    ),
+    action!(
+        "Export Explicit List",
         "Write native package names to ~/pkglist-explicit.txt for backups.",
-        run = run_spec!("run-export-explicit", no_confirm, false,
+        run = run_spec!(
+            "run-export-explicit",
+            no_confirm,
+            false,
             build_export_explicit,
-            "Explicit list exported.", "Export failed.",
-            "EXPORT: explicit list")),
-    action!("Export AUR List",
+            "Explicit list exported.",
+            "Export failed.",
+            "EXPORT: explicit list"
+        )
+    ),
+    action!(
+        "Export AUR List",
         "Write foreign (AUR) package names to ~/pkglist-aur.txt.",
-        run = run_spec!("run-export-aur", no_confirm, false,
+        run = run_spec!(
+            "run-export-aur",
+            no_confirm,
+            false,
             build_export_aur,
-            "AUR list exported.", "Export failed.",
-            "EXPORT: AUR list")),
-    action!("Export All Lists",
+            "AUR list exported.",
+            "Export failed.",
+            "EXPORT: AUR list"
+        )
+    ),
+    action!(
+        "Export All Lists",
         "Write both backup lists (~/pkglist-explicit.txt and ~/pkglist-aur.txt).",
-        run = run_spec!("run-export-all", no_confirm, false,
+        run = run_spec!(
+            "run-export-all",
+            no_confirm,
+            false,
             build_export_all,
-            "Package lists exported.", "Export failed.",
-            "EXPORT: all lists")),
+            "Package lists exported.",
+            "Export failed.",
+            "EXPORT: all lists"
+        )
+    ),
 ];
 
 pub static SYSTEM: [ActionDef; 5] = [
-    action!("Check for Updates",
+    action!(
+        "Check for Updates",
         "List available updates and pick a database refresh or full upgrade.",
-        open::updates),
-    action!("Refresh Databases (-Sy)",
+        open::updates
+    ),
+    action!(
+        "Refresh Databases (-Sy)",
         "Sync package databases from the mirrors.",
-        run = run_spec!("run-db-sy", no_confirm, false,
+        run = run_spec!(
+            "run-db-sy",
+            no_confirm,
+            false,
             build_db_sy,
-            "Package databases refreshed!", "Database refresh failed.",
-            "UPDATE: database refresh finished")),
-    action!("Force Refresh Databases (-Syy)",
+            "Package databases refreshed!",
+            "Database refresh failed.",
+            "UPDATE: database refresh finished"
+        )
+    ),
+    action!(
+        "Force Refresh Databases (-Syy)",
         "Re-download databases even if they look up to date.",
-        run = run_spec!("run-db-syy", no_confirm, false,
+        run = run_spec!(
+            "run-db-syy",
+            no_confirm,
+            false,
             build_db_syy,
-            "Package databases force refreshed!", "Force refresh failed.",
-            "UPDATE: force refresh finished")),
-    action!("Full System Upgrade (pacman)",
+            "Package databases force refreshed!",
+            "Force refresh failed.",
+            "UPDATE: force refresh finished"
+        )
+    ),
+    action!(
+        "Full System Upgrade (pacman)",
         "pacman -Syu — every official package brought up to date.",
-        run = run_spec!("run-upgrade", confirm_upgrade_pacman, false,
+        run = run_spec!(
+            "run-upgrade",
+            confirm_upgrade_pacman,
+            false,
             build_upgrade_pacman,
-            "System upgrade complete!", "System upgrade failed.",
-            "UPDATE: pacman upgrade finished")),
-    action!("Full Upgrade incl. AUR (yay/paru)",
+            "System upgrade complete!",
+            "System upgrade failed.",
+            "UPDATE: pacman upgrade finished"
+        )
+    ),
+    action!(
+        "Full Upgrade incl. AUR (yay/paru)",
         "Upgrade official repos and AUR packages in one go.",
-        run = run_spec!("run-upgrade-aur", confirm_upgrade_aur, false,
+        run = run_spec!(
+            "run-upgrade-aur",
+            confirm_upgrade_aur,
+            false,
             build_upgrade_aur,
-            "Full upgrade complete!", "Upgrade failed.",
-            "UPDATE: AUR upgrade finished")),
+            "Full upgrade complete!",
+            "Upgrade failed.",
+            "UPDATE: AUR upgrade finished"
+        )
+    ),
 ];
 
 pub static MAINTENANCE: [ActionDef; 4] = [
-    action!("Clean Package Cache (keep recent)",
+    action!(
+        "Clean Package Cache (keep recent)",
         "Keep only the newest N versions of each package (paccache -rkN).",
-        run = run_spec!("run-cache-keep", confirm_paccache, false,
+        run = run_spec!(
+            "run-cache-keep",
+            confirm_paccache,
+            false,
             build_cache_keep,
-            "Cache cleaned!", "Cache cleaning failed.",
-            "CACHE: paccache finished")),
-    action!("Remove Uninstalled Caches (-Sc)",
+            "Cache cleaned!",
+            "Cache cleaning failed.",
+            "CACHE: paccache finished"
+        )
+    ),
+    action!(
+        "Remove Uninstalled Caches (-Sc)",
         "Drop cached packages that are no longer installed.",
-        run = run_spec!("run-cache-sc", confirm_sc, false,
+        run = run_spec!(
+            "run-cache-sc",
+            confirm_sc,
+            false,
             build_cache_sc,
-            "Cache cleaned!", "Cache cleaning failed.",
-            "CACHE: -Sc finished")),
-    action!("Wipe ENTIRE Cache (-Scc)",
+            "Cache cleaned!",
+            "Cache cleaning failed.",
+            "CACHE: -Sc finished"
+        )
+    ),
+    action!(
+        "Wipe ENTIRE Cache (-Scc)",
         "Delete every cached package archive. Frees the most space.",
-        run = run_spec!("run-cache-scc", confirm_scc, true,
+        run = run_spec!(
+            "run-cache-scc",
+            confirm_scc,
+            true,
             build_cache_scc,
-            "Cache wiped!", "Cache wipe failed.",
-            "CACHE: -Scc finished")),
-    action!("Remove Pacman Lockfile",
+            "Cache wiped!",
+            "Cache wipe failed.",
+            "CACHE: -Scc finished"
+        )
+    ),
+    action!(
+        "Remove Pacman Lockfile",
         "Inspect /var/lib/pacman/db.lck and remove it safely.",
-        open::lockfile),
+        open::lockfile
+    ),
 ];
 
-pub static MIRRORS: [ActionDef; 1] = [action!("Mirror Management",
+pub static MIRRORS: [ActionDef; 1] = [action!(
+    "Mirror Management",
     "Auto-update or rank mirrors with reflector, back up and restore the mirrorlist.",
-    open::mirrors)];
+    open::mirrors
+)];
 
 pub static INFORMATION: [ActionDef; 2] = [
-    action!("System Dashboard",
+    action!(
+        "System Dashboard",
         "Hostname, kernel, uptime, package counts, cache size, disk usage.",
-        open::sysinfo),
-    action!("Dependency Check",
+        open::sysinfo
+    ),
+    action!(
+        "Dependency Check",
         "Report optional tools (reflector, pacman-contrib, AUR helper) and offer installs.",
-        open::dep_check),
+        open::dep_check
+    ),
 ];
 
 pub static EXTRAS: [ActionDef; 3] = [
-    action!("Favorite Packages",
+    action!(
+        "Favorite Packages",
         "Manage your favorite list and bulk-install it on fresh systems.",
-        open::favorites),
-    action!("Package Groups",
+        open::favorites
+    ),
+    action!(
+        "Package Groups",
         "Curated setups: GNOME, KDE, Hyprland, dev tools, gaming, fonts…",
-        open::groups),
-    action!("Import Package List",
+        open::groups
+    ),
+    action!(
+        "Import Package List",
         "Install packages from a pkglist text file via pacman or your AUR helper.",
-        open::import),
+        open::import
+    ),
 ];
 
-pub static SETTINGS: [ActionDef; 1] = [action!("Settings",
+pub static SETTINGS: [ActionDef; 1] = [action!(
+    "Settings",
     "AUR helper, dry-run mode, confirmations, logging, cache retention.",
-    open::settings)];
+    open::settings
+)];
 
 pub static CATEGORIES: [CatDef; 7] = [
-    CatDef { title: "📦 Packages", actions: &PACKAGES },
-    CatDef { title: "⬆  System", actions: &SYSTEM },
-    CatDef { title: "🧹 Maintenance", actions: &MAINTENANCE },
-    CatDef { title: "🌍 Mirrors", actions: &MIRRORS },
-    CatDef { title: "📊 Information", actions: &INFORMATION },
-    CatDef { title: "⭐ Extras", actions: &EXTRAS },
-    CatDef { title: "⚙  Settings", actions: &SETTINGS },
+    CatDef {
+        title: "📦 Packages",
+        actions: &PACKAGES,
+    },
+    CatDef {
+        title: "⬆  System",
+        actions: &SYSTEM,
+    },
+    CatDef {
+        title: "🧹 Maintenance",
+        actions: &MAINTENANCE,
+    },
+    CatDef {
+        title: "🌍 Mirrors",
+        actions: &MIRRORS,
+    },
+    CatDef {
+        title: "📊 Information",
+        actions: &INFORMATION,
+    },
+    CatDef {
+        title: "⭐ Extras",
+        actions: &EXTRAS,
+    },
+    CatDef {
+        title: "⚙  Settings",
+        actions: &SETTINGS,
+    },
 ];

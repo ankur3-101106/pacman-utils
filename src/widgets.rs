@@ -71,12 +71,12 @@ pub fn hint() -> Style {
 /// the numbered sidebar (1–7) is the non-color identifier.
 pub fn cat_color(idx: usize) -> Color {
     const PALETTE: [Color; 7] = [
-        Color::Cyan,      // 1 📦 Packages
-        Color::Green,     // 2 ⬆ System
-        Color::Yellow,    // 3 🧹 Maintenance
-        Color::Blue,      // 4 🌍 Mirrors
-        Color::Magenta,   // 5 📊 Information
-        Color::LightRed,  // 6 ⭐ Extras
+        Color::Cyan,         // 1 📦 Packages
+        Color::Green,        // 2 ⬆ System
+        Color::Yellow,       // 3 🧹 Maintenance
+        Color::Blue,         // 4 🌍 Mirrors
+        Color::Magenta,      // 5 📊 Information
+        Color::LightRed,     // 6 ⭐ Extras
         Color::Indexed(250), // 7 ⚙ Settings (near-white)
     ];
     PALETTE[idx % PALETTE.len()]
@@ -172,7 +172,13 @@ pub struct Menu {
 
 impl Menu {
     pub fn new(title: impl Into<String>, items: Vec<String>) -> Self {
-        Self { title: title.into(), items, selected: 0, offset: 0, view: 20 }
+        Self {
+            title: title.into(),
+            items,
+            selected: 0,
+            offset: 0,
+            view: 20,
+        }
     }
 
     pub fn up(&mut self) {
@@ -234,7 +240,10 @@ impl Menu {
                 } else {
                     Style::new()
                 };
-                line(vec![span(cursor.to_string(), accent_bold()), span(item.clone(), style)])
+                line(vec![
+                    span(cursor.to_string(), accent_bold()),
+                    span(item.clone(), style),
+                ])
             })
             .collect();
 
@@ -367,7 +376,9 @@ impl FuzzyList {
         ]));
 
         for i in self.offset..self.offset + inner_height {
-            let Some(&item_idx) = self.filtered.get(i) else { break };
+            let Some(&item_idx) = self.filtered.get(i) else {
+                break;
+            };
             let item = &self.items[item_idx];
             let selected_row = i == self.selected;
             let style = if selected_row {
@@ -378,7 +389,12 @@ impl FuzzyList {
             lines.push(line(vec![span(item.clone(), style)]));
         }
 
-        let title = format!(" {} ({}/{} matches) ", self.title, self.item_count(), self.total_count());
+        let title = format!(
+            " {} ({}/{} matches) ",
+            self.title,
+            self.item_count(),
+            self.total_count()
+        );
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(accent())
@@ -401,13 +417,23 @@ impl TextViewer {
         let lines: Vec<Vec<Span>> = if text.is_empty() {
             vec![vec![span("(empty)", dim())]]
         } else {
-            text.lines().map(|l| vec![span(l.to_string(), Style::new())]).collect()
+            text.lines()
+                .map(|l| vec![span(l.to_string(), Style::new())])
+                .collect()
         };
-        Self { title: title.into(), lines, top: 0 }
+        Self {
+            title: title.into(),
+            lines,
+            top: 0,
+        }
     }
 
     pub fn new_styled(title: impl Into<String>, lines: Vec<Vec<Span<'static>>>) -> Self {
-        Self { title: title.into(), lines, top: 0 }
+        Self {
+            title: title.into(),
+            lines,
+            top: 0,
+        }
     }
 
     pub fn handle_key(&mut self, key: &KeyEvent) -> bool {
@@ -455,7 +481,12 @@ impl TextViewer {
             .take(rows)
             .map(|l| Line::from(l.clone()))
             .collect();
-        let pos = format!(" {}–{}/{} ", self.top + 1, (self.top + rows).min(self.lines.len()), self.lines.len());
+        let pos = format!(
+            " {}–{}/{} ",
+            self.top + 1,
+            (self.top + rows).min(self.lines.len()),
+            self.lines.len()
+        );
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(accent())
@@ -504,8 +535,7 @@ pub const LOGO_SMALL: [&str; 3] = [
 
 /// Sidebar logo pane: colored ASCII name + version beneath.
 pub fn render_logo_pane(f: &mut Frame<'_>, area: Rect, version: &str) {
-    let rows =
-        Layout::vertical([Constraint::Length(3), Constraint::Length(1)]).split(area);
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Length(1)]).split(area);
     let logo: Vec<Line> = LOGO_SMALL
         .iter()
         .enumerate()
@@ -544,16 +574,20 @@ pub fn render_search_pane(f: &mut Frame<'_>, area: Rect, query: &str, active: bo
     let style = if active { styled(cat_color(1)) } else { dim() };
     let block = Block::new()
         .borders(Borders::ALL)
-        .border_style(if active { styled(cat_color(1)) } else { styled(Color::Indexed(244)) })
-        .title(Span::styled(" SEARCH ", styled(cat_color(1)).add_modifier(Modifier::BOLD)));
+        .border_style(if active {
+            styled(cat_color(1))
+        } else {
+            styled(Color::Indexed(244))
+        })
+        .title(Span::styled(
+            " SEARCH ",
+            styled(cat_color(1)).add_modifier(Modifier::BOLD),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let text = if query.is_empty() {
-        Line::from(span(
-            if active { "" } else { "Type to search (/)" },
-            dim(),
-        ))
+        Line::from(span(if active { "" } else { "Type to search (/)" }, dim()))
     } else {
         Line::from(vec![
             span(query.to_string(), accent_bold()),
@@ -586,8 +620,8 @@ pub fn render_command_list(f: &mut Frame<'_>, area: Rect) {
         ("[ctrl+c]", "Interrupt command"),
     ];
 
-    let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
     for (col_idx, entries) in [left, right].into_iter().enumerate() {
         let lines: Vec<Line> = entries
             .iter()
@@ -614,10 +648,7 @@ pub fn render_help_overlay(f: &mut Frame<'_>) {
 
     // Rainbow logo — one accent per category color.
     for (i, l) in BIG_LOGO.iter().enumerate() {
-        lines.push(Line::from(span(
-            l.to_string(),
-            styled(cat_color(i)),
-        )));
+        lines.push(Line::from(span(l.to_string(), styled(cat_color(i)))));
     }
     lines.push(Line::from(""));
     let mut row = |key: &str, desc: &str| {
@@ -681,10 +712,18 @@ pub fn spinner(f: &mut Frame<'_>, frame_char: &str, label: &str) {
     // Clear the whole overlay region so nothing bleeds through.
     f.render_widget(Clear, area);
     f.render_widget(block, area);
-    let row = Layout::vertical([Constraint::Fill(1), Constraint::Length(1), Constraint::Fill(1)]).split(inner);
+    let row = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .split(inner);
     f.render_widget(
-        Paragraph::new(line(vec![span(frame_char.to_string(), accent_bold()), span(format!(" {label}"), accent())]))
-            .alignment(Alignment::Center),
+        Paragraph::new(line(vec![
+            span(frame_char.to_string(), accent_bold()),
+            span(format!(" {label}"), accent()),
+        ]))
+        .alignment(Alignment::Center),
         row[1],
     );
 }

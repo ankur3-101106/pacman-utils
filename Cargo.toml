@@ -1,9 +1,10 @@
 [package]
 name = "archman"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "Interactive Arch Linux system manager with a ratatui interface"
 license = "GPL-2.0"
+repository = "https://github.com/ankur3-101106/pacman-utils"
 
 [dependencies]
 ratatui = "0.29"

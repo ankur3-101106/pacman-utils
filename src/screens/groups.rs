@@ -51,16 +51,11 @@ impl GStatus {
     }
 }
 
+#[derive(Default)]
 struct Detail {
     desc: String,
     names: Vec<String>,
     statuses: Vec<GStatus>,
-}
-
-impl Default for Detail {
-    fn default() -> Self {
-        Self { desc: String::new(), names: Vec::new(), statuses: Vec::new() }
-    }
 }
 
 impl Detail {
@@ -82,7 +77,11 @@ impl Detail {
                 }
             })
             .collect();
-        Self { desc: desc.to_string(), names, statuses }
+        Self {
+            desc: desc.to_string(),
+            names,
+            statuses,
+        }
     }
 }
 
@@ -142,8 +141,10 @@ impl GroupsScreen {
         if has_official {
             let n = official.len();
             app.toast(format!("Installing {n} official packages..."), Sev::Info);
-            let mut cmd_args = vec!["-S".to_string(), "--needed".to_string()];
-            cmd_args.extend(official);
+            let mut raw = vec!["-S", "--needed"];
+            let off_refs: Vec<&str> = official.iter().map(String::as_str).collect();
+            raw.extend(off_refs);
+            let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &raw);
             app.queue_ext(
                 ExtCmd::new("grp-official", "sudo", &cmd_args)
                     .note(format!("Install group: {desc} (official)"))
@@ -158,9 +159,14 @@ impl GroupsScreen {
             let n = aur.len();
             match app.aur_helper() {
                 Some(helper) => {
-                    app.toast(format!("Installing {n} AUR packages via {helper}..."), Sev::Info);
-                    let mut cmd_args = vec!["-S".to_string(), "--needed".to_string()];
-                    cmd_args.extend(aur);
+                    app.toast(
+                        format!("Installing {n} AUR packages via {helper}..."),
+                        Sev::Info,
+                    );
+                    let mut raw = vec!["-S", "--needed"];
+                    let aur_refs: Vec<&str> = aur.iter().map(String::as_str).collect();
+                    raw.extend(aur_refs);
+                    let cmd_args = crate::sys::aur_args(app.settings(), &raw);
                     app.queue_ext(
                         ExtCmd::new("grp-aur", &helper, &cmd_args)
                             .note(format!("Install group: {desc} (AUR via {helper})"))
@@ -172,7 +178,10 @@ impl GroupsScreen {
                     );
                 }
                 None => {
-                    app.toast("Cannot install AUR packages — no AUR helper found:", Sev::Warn);
+                    app.toast(
+                        "Cannot install AUR packages — no AUR helper found:",
+                        Sev::Warn,
+                    );
                     app.log(&format!(
                         "PKG_GROUPS: skipped {n} AUR packages for {desc}: {}",
                         aur.join(", ")
@@ -183,7 +192,10 @@ impl GroupsScreen {
         if !has_official && !has_aur {
             app.toast("Group installation complete!", Sev::Success);
         }
-        app.log(&format!("PKG_GROUPS: Installing {} packages for {desc}", pkgs.len()));
+        app.log(&format!(
+            "PKG_GROUPS: Installing {} packages for {desc}",
+            pkgs.len()
+        ));
     }
 }
 
@@ -221,8 +233,12 @@ impl Screen for GroupsScreen {
                 match key.code {
                     KeyCode::Enter => {
                         if let Some(pkg) = self.specific.take_selected() {
-                            app.confirm(format!("Install {pkg}?"), false);
-                            self.await_kind = Some(Await::GroupOne(pkg));
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm(format!("Install {pkg}?"), false);
+                                self.await_kind = Some(Await::GroupOne(pkg));
+                            } else {
+                                install_specific_package(app, &pkg);
+                            }
                         }
                     }
                     KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Root,
@@ -240,8 +256,12 @@ impl Screen for GroupsScreen {
                         match self.detail_menu.selected {
                             0 => {
                                 let total = names.len();
-                                app.confirm(format!("Install all {total} packages?"), false);
-                                self.await_kind = Some(Await::GroupBatch(names));
+                                if app.settings().is_true("CONFIRM_ACTIONS") {
+                                    app.confirm(format!("Install all {total} packages?"), false);
+                                    self.await_kind = Some(Await::GroupBatch(names));
+                                } else {
+                                    self.do_install(app, names, &desc);
+                                }
                             }
                             1 => {
                                 let missing: Vec<String> = names
@@ -252,10 +272,12 @@ impl Screen for GroupsScreen {
                                     .collect();
                                 if missing.is_empty() {
                                     app.toast("All packages are already installed!", Sev::Success);
-                                } else {
+                                } else if app.settings().is_true("CONFIRM_ACTIONS") {
                                     let n = missing.len();
                                     app.confirm(format!("Install {n} missing packages?"), false);
                                     self.await_kind = Some(Await::GroupBatch(missing));
+                                } else {
+                                    self.do_install(app, missing, &desc);
                                 }
                             }
                             2 => {
@@ -321,7 +343,9 @@ impl Screen for GroupsScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(await_kind) = self.await_kind.take() else { return };
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
         match await_kind {
             Await::GroupBatch(pkgs) => {
                 if !yes {
@@ -339,7 +363,10 @@ impl Screen for GroupsScreen {
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
-        if matches!(tag, "grp-official" | "grp-aur" | "install-specific-official" | "install-specific-aur") {
+        if matches!(
+            tag,
+            "grp-official" | "grp-aur" | "install-specific-official" | "install-specific-aur"
+        ) {
             if ok {
                 app.toast("Group installation complete!", Sev::Success);
                 app.log("PKG_GROUPS: installation successful");

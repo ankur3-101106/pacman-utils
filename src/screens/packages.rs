@@ -6,19 +6,13 @@
 // ──────────────────────────────────────────────────────────────────────
 
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{
-    layout::Rect,
-    style::Style,
-    text::Span,
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, style::Style, text::Span, widgets::Paragraph, Frame};
 
 use crate::app::{App, ExtCmd, Screen};
 use crate::sys::{self};
 use crate::widgets::{self, FuzzyList, Menu, Sev};
 
-use super::{args, viewer::ViewerScreen};
+use super::viewer::ViewerScreen;
 
 // ── Shared helpers ──────────────────────────────────────────────────
 
@@ -44,20 +38,35 @@ fn info_viewer_for(pkg: &str, aur_helper: Option<String>) -> Option<Box<ViewerSc
     use crate::screens::info_lines;
 
     if let Some(raw) = sys::qi(pkg) {
-        let mut lines = vec![vec![widgets::span("Installed package:", widgets::success())]];
+        let mut lines = vec![vec![widgets::span(
+            "Installed package:",
+            widgets::success(),
+        )]];
         lines.extend(info_lines(&raw, &[]));
-        return Some(ViewerScreen::new(format!("📖 Package Information — {pkg}"), lines));
+        return Some(ViewerScreen::new(
+            format!("📖 Package Information — {pkg}"),
+            lines,
+        ));
     }
     if let Some(raw) = sys::si(&[pkg]) {
-        let mut lines = vec![vec![widgets::span("Available in repository:", widgets::accent())]];
+        let mut lines = vec![vec![widgets::span(
+            "Available in repository:",
+            widgets::accent(),
+        )]];
         lines.extend(info_lines(&raw, &[]));
-        return Some(ViewerScreen::new(format!("📖 Package Information — {pkg}"), lines));
+        return Some(ViewerScreen::new(
+            format!("📖 Package Information — {pkg}"),
+            lines,
+        ));
     }
     if let Some(helper) = aur_helper {
         if let Some(raw) = crate::sys::capture(&helper, &["-Si", pkg]) {
             let mut lines = vec![vec![widgets::span("Available in AUR:", widgets::warning())]];
             lines.extend(info_lines(&raw, &[]));
-            return Some(ViewerScreen::new(format!("📖 Package Information — {pkg}"), lines));
+            return Some(ViewerScreen::new(
+                format!("📖 Package Information — {pkg}"),
+                lines,
+            ));
         }
     }
     None
@@ -99,7 +108,9 @@ impl Screen for BrowsePackagesScreen {
         }
         match key.code {
             KeyCode::Enter => {
-                let Some(entry) = self.pick.take_selected() else { return };
+                let Some(entry) = self.pick.take_selected() else {
+                    return;
+                };
                 let pkg = name_of(&entry);
                 match info_viewer_for(&pkg, app.aur_helper()) {
                     Some(v) => app.push(v),
@@ -113,11 +124,12 @@ impl Screen for BrowsePackagesScreen {
 
     fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
         if self.empty {
-            let kind = if self.explicit { "explicitly installed" } else { "installed" };
-            f.render_widget(
-                widgets::panel(&format!("No {kind} packages found.")),
-                area,
-            );
+            let kind = if self.explicit {
+                "explicitly installed"
+            } else {
+                "installed"
+            };
+            f.render_widget(widgets::panel(&format!("No {kind} packages found.")), area);
             return;
         }
         self.pick.render(f, area);
@@ -149,15 +161,19 @@ impl Screen for FilesPickScreen {
         }
         match key.code {
             KeyCode::Enter => {
-                let Some(entry) = self.pick.take_selected() else { return };
+                let Some(entry) = self.pick.take_selected() else {
+                    return;
+                };
                 let pkg = name_of(&entry);
                 let files = sys::ql_files(&pkg);
                 if files.is_empty() {
                     app.toast(format!("No files found for {pkg}."), Sev::Error);
                 } else {
                     let count = files.len();
-                    let lines: Vec<Vec<Span>> =
-                        files.into_iter().map(|f| vec![Span::styled(f, Style::new())]).collect();
+                    let lines: Vec<Vec<Span>> = files
+                        .into_iter()
+                        .map(|f| vec![Span::styled(f, Style::new())])
+                        .collect();
                     let title = format!("📂 Files in {pkg} — {count} files");
                     app.push(ViewerScreen::new(title, lines));
                 }
@@ -203,10 +219,7 @@ impl Screen for OwnerQueryScreen {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
-        f.render_widget(
-            widgets::panel("🔎 Find which package owns a file"),
-            area,
-        );
+        f.render_widget(widgets::panel("🔎 Find which package owns a file"), area);
     }
 
     fn on_input(&mut self, app: &mut App, value: String) {
@@ -293,7 +306,10 @@ impl Screen for InfoQueryScreen {
 pub fn history_viewer() -> Box<dyn Screen> {
     let entries = sys::history_entries(50);
     let lines: Vec<Vec<Span>> = if entries.is_empty() {
-        vec![vec![widgets::span("(no installation history found)", widgets::dim())]]
+        vec![vec![widgets::span(
+            "(no installation history found)",
+            widgets::dim(),
+        )]]
     } else {
         entries
             .into_iter()
@@ -396,6 +412,21 @@ impl ReinstallPickScreen {
             pending: None,
         })
     }
+
+    fn execute_reinstall(&mut self, app: &mut App, pkg: &str) {
+        app.log(&format!("PACKAGES: Reinstalling {pkg}"));
+        let cmd_args =
+            crate::sys::sudo_pacman_args(app.settings(), &["-S", "--overwrite", "*", pkg]);
+        app.queue_ext(
+            ExtCmd::new("reinstall", "sudo", &cmd_args)
+                .note(format!("Reinstall {pkg} (--overwrite '*')"))
+                .result(
+                    "Package reinstalled!",
+                    "Reinstallation failed.",
+                    "PACKAGES: reinstall finished",
+                ),
+        );
+    }
 }
 
 impl Screen for ReinstallPickScreen {
@@ -405,16 +436,12 @@ impl Screen for ReinstallPickScreen {
         }
         match key.code {
             KeyCode::Enter => {
-                let Some(entry) = self.pick.take_selected() else { return };
+                let Some(entry) = self.pick.take_selected() else {
+                    return;
+                };
                 let pkg = name_of(&entry);
-                app.toast(
-                    format!(
-                        "This will reinstall {pkg}, overwriting any modified files."
-                    ),
-                    Sev::Info,
-                );
-                app.confirm(format!("Reinstall {pkg}?"), false);
-                self.pending = Some(pkg);
+                let tx = crate::tx::TransactionSpec::reinstall(app.settings(), &pkg);
+                app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
             }
             KeyCode::Esc | KeyCode::Char('q') => app.pop(),
             _ => {}
@@ -430,24 +457,13 @@ impl Screen for ReinstallPickScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(pkg) = self.pending.take() else { return };
+        let Some(pkg) = self.pending.take() else {
+            return;
+        };
         if !yes {
             return;
         }
-        app.log(&format!("PACKAGES: Reinstalling {pkg}"));
-        app.queue_ext(
-            ExtCmd::new(
-                "reinstall",
-                "sudo",
-                &args(&["pacman", "-S", "--overwrite", "*", &pkg]),
-            )
-            .note(format!("Reinstall {pkg} (--overwrite '*')"))
-            .result(
-                "Package reinstalled!",
-                "Reinstallation failed.",
-                "PACKAGES: reinstall finished",
-            ),
-        );
+        self.execute_reinstall(app, &pkg);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
@@ -482,7 +498,31 @@ impl OrphansScreen {
                 "🔙 Cancel".to_string(),
             ],
         );
-        Box::new(Self { orphans, menu, pending: None })
+        Box::new(Self {
+            orphans,
+            menu,
+            pending: None,
+        })
+    }
+}
+
+impl OrphansScreen {
+    fn execute_remove_orphans(&mut self, app: &mut App, orphans: Vec<String>) {
+        let count = orphans.len();
+        app.log(&format!("PACKAGES: Removing {count} orphan packages"));
+        let mut raw = vec!["-Rns"];
+        let orphan_refs: Vec<&str> = orphans.iter().map(String::as_str).collect();
+        raw.extend(orphan_refs);
+        let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &raw);
+        app.queue_ext(
+            ExtCmd::new("orphans-rm", "sudo", &cmd_args)
+                .note(format!("Remove {count} orphan packages"))
+                .result(
+                    "Orphan packages removed!",
+                    "Some packages may not have been removed.",
+                    "PACKAGES: orphan removal finished",
+                ),
+        );
     }
 }
 
@@ -495,8 +535,8 @@ impl Screen for OrphansScreen {
             KeyCode::Enter => match self.menu.selected {
                 0 => {
                     let v = self.orphans.clone();
-                    app.confirm("Remove all orphan packages?", true);
-                    self.pending = Some(v);
+                    let tx = crate::tx::TransactionSpec::remove_orphans(app.settings(), &v);
+                    app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
                 }
                 _ => app.pop(),
             },
@@ -551,23 +591,13 @@ impl Screen for OrphansScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(orphans) = self.pending.take() else { return };
+        let Some(orphans) = self.pending.take() else {
+            return;
+        };
         if !yes {
             return;
         }
-        let count = orphans.len();
-        app.log(&format!("PACKAGES: Removing {count} orphan packages"));
-        let mut cmd_args = vec!["-Rns".to_string()];
-        cmd_args.extend(orphans);
-        app.queue_ext(
-            ExtCmd::new("orphans-rm", "sudo", &cmd_args)
-                .note(format!("Remove {count} orphan packages"))
-                .result(
-                    "Orphan packages removed!",
-                    "Some packages may not have been removed.",
-                    "PACKAGES: orphan removal finished",
-                ),
-        );
+        self.execute_remove_orphans(app, orphans);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {

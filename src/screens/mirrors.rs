@@ -86,9 +86,12 @@ impl MirrorsScreen {
 
         // Silent safety backup first (bash: sudo cp before running).
         app.queue_ext(
-            ExtCmd::new("mirrors-pre-backup", "sudo", &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]))
-                .note("Backing up current mirrorlist")
-                ,
+            ExtCmd::new(
+                "mirrors-pre-backup",
+                "sudo",
+                &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]),
+            )
+            .note("Backing up current mirrorlist"),
         );
 
         let mut cmd_args: Vec<String> = vec!["reflector".into()];
@@ -104,9 +107,18 @@ impl MirrorsScreen {
         cmd_args.push(MIRRORLIST.into());
 
         if let Some(c) = &country {
-            app.toast(format!("Using: --country '{c}' --latest {} --sort rate", mode.latest()), Sev::Info);
+            app.toast(
+                format!(
+                    "Using: --country '{c}' --latest {} --sort rate",
+                    mode.latest()
+                ),
+                Sev::Info,
+            );
         } else {
-            app.toast(format!("Using: --latest {} --sort rate", mode.latest()), Sev::Info);
+            app.toast(
+                format!("Using: --latest {} --sort rate", mode.latest()),
+                Sev::Info,
+            );
         }
 
         app.queue_ext(
@@ -122,6 +134,36 @@ impl MirrorsScreen {
                 ),
         );
     }
+
+    fn execute_install_reflector(&self, app: &mut App) {
+        let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-S", "reflector"]);
+        app.queue_ext(
+            ExtCmd::new("mirrors-dep", "sudo", &cmd_args)
+                .note("Install reflector")
+                .result(
+                    "reflector installed.",
+                    "Failed to install reflector.",
+                    "MIRRORS: reflector install finished",
+                ),
+        );
+    }
+
+    fn execute_restore_backup(&self, app: &mut App) {
+        app.log("MIRRORS: Restoring mirrorlist from backup");
+        app.queue_ext(
+            ExtCmd::new(
+                "mirrors-restore",
+                "sudo",
+                &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]),
+            )
+            .note("Restore mirrorlist from backup")
+            .result(
+                "Mirrorlist restored!",
+                "Restore failed.",
+                "MIRRORS: restore finished",
+            ),
+        );
+    }
 }
 
 impl Screen for MirrorsScreen {
@@ -130,69 +172,88 @@ impl Screen for MirrorsScreen {
             return;
         }
         match key.code {
-            KeyCode::Enter => {
-                match self.menu.selected {
-                    0 | 1 => {
-                        let mode =
-                            if self.menu.selected == 0 { ReflectorMode::Auto } else { ReflectorMode::Rank };
-                        if !app.caps().reflector {
-                            app.toast("reflector is not installed.", Sev::Warn);
+            KeyCode::Enter => match self.menu.selected {
+                0 | 1 => {
+                    let mode = if self.menu.selected == 0 {
+                        ReflectorMode::Auto
+                    } else {
+                        ReflectorMode::Rank
+                    };
+                    if !app.caps().reflector {
+                        app.toast("reflector is not installed.", Sev::Warn);
+                        if app.settings().is_true("CONFIRM_ACTIONS") {
                             app.confirm("Install reflector?", false);
                             self.await_kind = Some(Await::InstallReflector);
                         } else {
-                            self.country_for = Some(mode);
-                            app.ask_input("Country name or code (leave blank for global)");
+                            self.execute_install_reflector(app);
                         }
+                    } else {
+                        self.country_for = Some(mode);
+                        app.ask_input("Country name or code (leave blank for global)");
                     }
-                    2 => {
-                        let servers = sys::mirror_servers();
-                        if servers.is_empty() {
-                            app.toast(
-                                format!("No active mirrors found in {MIRRORLIST}"),
-                                Sev::Warn,
-                            );
-                        } else {
-                            let lines: Vec<Vec<Span>> = servers
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, m)| {
-                                    vec![
-                                        widgets::span(format!("{:>3}. ", i + 1), widgets::accent_bold()),
-                                        Span::styled(m, Style::new()),
-                                    ]
-                                })
-                                .collect();
-                            app.push(ViewerScreen::new("📋 Current Mirrors", lines));
-                        }
-                    }
-                    3 => {
-                        app.log("MIRRORS: Backing up mirrorlist");
-                        app.queue_ext(
-                            ExtCmd::new("mirrors-backup", "sudo", &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]))
-                                .note("Backup current mirrorlist")
-                                .result(
-                                    "Mirrorlist backed up.",
-                                    "Backup failed.",
-                                    "MIRRORS: backup finished",
-                                ),
+                }
+                2 => {
+                    let servers = sys::mirror_servers();
+                    if servers.is_empty() {
+                        app.toast(
+                            format!("No active mirrors found in {MIRRORLIST}"),
+                            Sev::Warn,
                         );
+                    } else {
+                        let lines: Vec<Vec<Span>> = servers
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, m)| {
+                                vec![
+                                    widgets::span(
+                                        format!("{:>3}. ", i + 1),
+                                        widgets::accent_bold(),
+                                    ),
+                                    Span::styled(m, Style::new()),
+                                ]
+                            })
+                            .collect();
+                        app.push(ViewerScreen::new("📋 Current Mirrors", lines));
                     }
-                    4 => {
-                        if std::path::Path::new(MIRRORLIST_BACKUP).exists() {
-                            let date = crate::sys::capture("stat", &["-c", "%y", MIRRORLIST_BACKUP])
-                                .map(|s| s.split('.').next().unwrap_or(&s).to_string())
-                                .unwrap_or_else(|| "unknown".into());
-                            app.toast(format!("Backup found: {MIRRORLIST_BACKUP}"), Sev::Info);
-                            app.toast(format!("Created: {date}"), Sev::Info);
+                }
+                3 => {
+                    app.log("MIRRORS: Backing up mirrorlist");
+                    app.queue_ext(
+                        ExtCmd::new(
+                            "mirrors-backup",
+                            "sudo",
+                            &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]),
+                        )
+                        .note("Backup current mirrorlist")
+                        .result(
+                            "Mirrorlist backed up.",
+                            "Backup failed.",
+                            "MIRRORS: backup finished",
+                        ),
+                    );
+                }
+                4 => {
+                    if std::path::Path::new(MIRRORLIST_BACKUP).exists() {
+                        let date = crate::sys::capture("stat", &["-c", "%y", MIRRORLIST_BACKUP])
+                            .map(|s| s.split('.').next().unwrap_or(&s).to_string())
+                            .unwrap_or_else(|| "unknown".into());
+                        app.toast(format!("Backup found: {MIRRORLIST_BACKUP}"), Sev::Info);
+                        app.toast(format!("Created: {date}"), Sev::Info);
+                        if app.settings().is_true("CONFIRM_ACTIONS") {
                             app.confirm("Restore mirrorlist from backup?", false);
                             self.await_kind = Some(Await::RestoreBackup);
                         } else {
-                            app.toast(format!("No backup found at {MIRRORLIST_BACKUP}"), Sev::Error);
+                            self.execute_restore_backup(app);
                         }
+                    } else {
+                        app.toast(
+                            format!("No backup found at {MIRRORLIST_BACKUP}"),
+                            Sev::Error,
+                        );
                     }
-                    _ => app.pop(),
                 }
-            }
+                _ => app.pop(),
+            },
             KeyCode::Esc | KeyCode::Char('q') => app.pop(),
             _ => {}
         }
@@ -208,7 +269,15 @@ impl Screen for MirrorsScreen {
             &[
                 ("Mirrorlist", MIRRORLIST.to_string()),
                 ("Active Mirrors", count.to_string()),
-                ("Reflector", if self.reflector_installed { "installed" } else { "not installed" }.to_string()),
+                (
+                    "Reflector",
+                    if self.reflector_installed {
+                        "installed"
+                    } else {
+                        "not installed"
+                    }
+                    .to_string(),
+                ),
             ],
         );
         self.menu.render(f, rows[1]);
@@ -219,44 +288,39 @@ impl Screen for MirrorsScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(await_kind) = self.await_kind.take() else { return };
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
         match await_kind {
             Await::InstallReflector => {
                 if !yes {
                     return;
                 }
-                app.queue_ext(
-                    ExtCmd::new("mirrors-dep", "sudo", &args(&["pacman", "-S", "reflector", "--noconfirm"]))
-                        .note("Install reflector")
-                        .result(
-                            "reflector installed.",
-                            "Failed to install reflector.",
-                            "MIRRORS: reflector install finished",
-                        ),
-                );
+                self.execute_install_reflector(app);
             }
             Await::RestoreBackup => {
                 if !yes {
                     return;
                 }
-                app.log("MIRRORS: Restoring mirrorlist from backup");
-                app.queue_ext(
-                    ExtCmd::new("mirrors-restore", "sudo", &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]))
-                        .note("Restore mirrorlist from backup")
-                        .result(
-                            "Mirrorlist restored!",
-                            "Restore failed.",
-                            "MIRRORS: restore finished",
-                        ),
-                );
+                self.execute_restore_backup(app);
             }
         }
     }
 
     fn on_input(&mut self, app: &mut App, value: String) {
-        let Some(mode) = self.country_for.take() else { return };
+        let Some(mode) = self.country_for.take() else {
+            return;
+        };
         let country = value.trim().to_string();
-        self.run_reflector(app, mode, if country.is_empty() { None } else { Some(country) });
+        self.run_reflector(
+            app,
+            mode,
+            if country.is_empty() {
+                None
+            } else {
+                Some(country)
+            },
+        );
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
@@ -285,16 +349,22 @@ impl Screen for MirrorsScreen {
                     app.log("MIRRORS: reflector failed, backup restored");
                     if std::path::Path::new(MIRRORLIST_BACKUP).exists() {
                         app.queue_ext(
-                            ExtCmd::new("mirrors-fallback", "sudo", &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]))
-                                .note("Restore mirrorlist backup")
-                                ,
+                            ExtCmd::new(
+                                "mirrors-fallback",
+                                "sudo",
+                                &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]),
+                            )
+                            .note("Restore mirrorlist backup"),
                         );
                     }
                 }
             }
             "mirrors-backup" => {
                 if ok {
-                    app.toast(format!("Mirrorlist backed up to {MIRRORLIST_BACKUP}"), Sev::Success);
+                    app.toast(
+                        format!("Mirrorlist backed up to {MIRRORLIST_BACKUP}"),
+                        Sev::Success,
+                    );
                     app.log("MIRRORS: Backup successful");
                 } else {
                     app.toast("Backup failed.", Sev::Error);

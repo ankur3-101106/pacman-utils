@@ -15,11 +15,9 @@ use ratatui::{
 };
 use std::time::Instant;
 
-use crate::app::{App, ExtCmd, Screen};
+use crate::app::{App, Screen};
 use crate::sys::{self, Job};
 use crate::widgets::{self, Menu, Sev};
-
-use super::args;
 
 const MENU_ITEMS: [&str; 5] = [
     "🔄 Refresh databases only (pacman -Sy)",
@@ -38,6 +36,7 @@ enum UpdOp {
 }
 
 impl UpdOp {
+    #[allow(dead_code)]
     fn tag(self) -> &'static str {
         match self {
             UpdOp::Sy => "upd-sy",
@@ -76,57 +75,31 @@ impl UpdateScreen {
     fn run_op(&mut self, app: &mut App, op: UpdOp) {
         match op {
             UpdOp::Sy => {
-                app.log("UPDATE: Refreshing package databases");
-                app.queue_ext(
-                    ExtCmd::new(op.tag(), "sudo", &args(&["pacman", "-Sy"]))
-                        .note("Refreshing package databases")
-                        .result(
-                            "Package databases refreshed!",
-                            "Database refresh failed.",
-                            "UPDATE: database refresh finished",
-                        ),
-                );
+                let tx = crate::tx::TransactionSpec::refresh_db(app.settings(), false);
+                app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
             }
             UpdOp::Syy => {
-                app.log("UPDATE: Force refreshing package databases");
-                app.queue_ext(
-                    ExtCmd::new(op.tag(), "sudo", &args(&["pacman", "-Syy"]))
-                        .note("Force refreshing package databases")
-                        .result(
-                            "Package databases force refreshed!",
-                            "Force database refresh failed.",
-                            "UPDATE: force refresh finished",
-                        ),
-                );
+                let tx = crate::tx::TransactionSpec::refresh_db(app.settings(), true);
+                app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
             }
             UpdOp::Syu => {
-                app.log("UPDATE: Full system upgrade via pacman");
-                app.queue_ext(
-                    ExtCmd::new(op.tag(), "sudo", &args(&["pacman", "-Syu"]))
-                        .note("Full system upgrade")
-                        .result(
-                            "System upgrade complete!",
-                            "System upgrade failed.",
-                            "UPDATE: pacman upgrade finished",
-                        ),
-                );
+                let tx = crate::tx::TransactionSpec::upgrade_pacman(app.settings());
+                app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
             }
             UpdOp::Aur => {
                 let Some(helper) = app.aur_helper() else {
-                    app.toast("No AUR helper found. Install yay or paru first.", Sev::Error);
-                    app.toast("You can install one via Settings > Change AUR Helper.", Sev::Info);
+                    app.toast(
+                        "No AUR helper found. Install yay or paru first.",
+                        Sev::Error,
+                    );
+                    app.toast(
+                        "You can install one via Settings > Change AUR Helper.",
+                        Sev::Info,
+                    );
                     return;
                 };
-                app.log(&format!("UPDATE: Full upgrade via {helper}"));
-                app.queue_ext(
-                    ExtCmd::new(op.tag(), &helper, &args(&["-Syu"]))
-                        .note(format!("Full upgrade via {helper}"))
-                        .result(
-                            "Full upgrade complete!",
-                            "Upgrade failed.",
-                            "UPDATE: AUR upgrade finished",
-                        ),
-                );
+                let tx = crate::tx::TransactionSpec::upgrade_aur(app.settings(), &helper);
+                app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
             }
         }
     }
@@ -182,10 +155,16 @@ impl Screen for UpdateScreen {
         let mut lines: Vec<Line> = Vec::new();
         match &self.updates {
             None => {
-                lines.push(Line::from(widgets::span("Checking for updates...", widgets::dim())));
+                lines.push(Line::from(widgets::span(
+                    "Checking for updates...",
+                    widgets::dim(),
+                )));
             }
             Some(updates) if updates.is_empty() => {
-                lines.push(Line::from(widgets::span("✔ System is up to date!", widgets::success())));
+                lines.push(Line::from(widgets::span(
+                    "✔ System is up to date!",
+                    widgets::success(),
+                )));
             }
             Some(updates) => {
                 let icon = widgets::span("⚠ ", widgets::warning());
@@ -195,7 +174,10 @@ impl Screen for UpdateScreen {
                 );
                 lines.push(Line::from(vec![icon, msg]));
                 for u in updates.iter().take(20) {
-                    lines.push(Line::from(Span::styled(format!("  {u}"), Style::new().fg(widgets::ACCENT))));
+                    lines.push(Line::from(Span::styled(
+                        format!("  {u}"),
+                        Style::new().fg(widgets::ACCENT),
+                    )));
                 }
                 if updates.len() > 20 {
                     lines.push(Line::from(widgets::span(
@@ -225,7 +207,9 @@ impl Screen for UpdateScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(op) = self.pending.take() else { return };
+        let Some(op) = self.pending.take() else {
+            return;
+        };
         if !yes {
             app.toast("Update cancelled.", Sev::Info);
             return;
@@ -275,8 +259,8 @@ impl Screen for UpdateScreen {
 impl UpdateScreen {
     /// Route through CONFIRM_ACTIONS for the upgrade operations.
     fn start_with_confirm(&mut self, app: &mut App, op: UpdOp) {
-        let needs_confirm = matches!(op, UpdOp::Syu | UpdOp::Aur)
-            && app.settings().is_true("CONFIRM_ACTIONS");
+        let needs_confirm =
+            matches!(op, UpdOp::Syu | UpdOp::Aur) && app.settings().is_true("CONFIRM_ACTIONS");
         if needs_confirm {
             let prompt = match op {
                 UpdOp::Syu => "Perform full system upgrade?",

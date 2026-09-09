@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.archlinux.org/"><img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" alt="Arch Linux" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" /></a>
-  <img src="https://img.shields.io/badge/Version-2.0.0-green?style=for-the-badge" alt="version" />
+  <img src="https://img.shields.io/badge/Version-2.1.0-green?style=for-the-badge" alt="version" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL_2.0-blue?style=for-the-badge" alt="GPL-2.0" /></a>
 </p>
 
@@ -33,12 +33,36 @@
 | | Feature | Description |
 |--|---------|-------------|
 | 📦 | **Packages** | Install (official + AUR, dry-run mode), search, remove (3 strategies), browse, file ownership, package info, history, transaction log, reinstall, orphans, export/import lists |
+| 🛡 | **Preflight & Preview** | Preflight checks (database lock, active PIDs, disk space, privileges, network) and non-destructive transaction previews before execution |
 | ⬆ | **System** | Update check (`checkupdates`), database refresh, full upgrades via pacman or your AUR helper |
 | 🧹 | **Maintenance** | Cache cleaning (`paccache -rkN`, `-Sc`, `-Scc`), safe `db.lck` removal |
 | 🌍 | **Mirrors** | reflector auto-update & ranking, mirrorlist backup/restore |
 | 📊 | **Information** | System dashboard, dependency check with one-key installs |
 | ⭐ | **Extras** | Favorite packages, 12 curated package groups, list import |
-| ⚙ | **Settings** | AUR helper (incl. building yay/paru from AUR), dry-run, confirmations, logging, cache retention |
+| ⚙ | **Settings** | AUR helper (yay/paru), dry-run mode, independent confirmation controls, logging, cache retention |
+
+## 🛡 Preflight Checks & Transaction Preview
+
+Before performing state-altering package actions, `archman` performs preflight validation and displays an interactive **Transaction Preview**:
+
+- **Preflight Checks:**
+  - **Database Lock:** Verifies `/var/lib/pacman/db.lck` is not present, inspecting `/proc` for active pacman processes. Blocks if locked.
+  - **Executables:** Confirms required binaries (`pacman`, `sudo`, `yay`, `paru`) exist in `PATH`. Blocks if missing.
+  - **Root / Sudo:** Checks for root privileges or cached `sudo` credentials. Warns if password prompt will be required.
+  - **Network:** Detects network interface state for operations requiring remote mirrors.
+  - **Disk Space:** Evaluates root partition free space (blocks if < 100 MB, warns if < 1 GB).
+  - **Target Safety:** Rejects invalid shell characters or empty target specifications.
+- **Transaction Preview:** Runs non-destructive `pacman --print` to inspect resolved targets and download URLs. Honest preview limitations are noted when using AUR helpers or operations where non-destructive simulation is unsupported.
+
+## ⚙ Confirmation Architecture
+
+Confirmation controls are strictly separated:
+
+| Setting | Purpose | Default |
+|---------|---------|---------|
+| `CONFIRM_ACTIONS` | Controls whether **archman's TUI** prompts for confirmation before launching operations | `true` |
+| `NATIVE_CONFIRM` | Controls whether the **underlying package manager** (`pacman`/`yay`/`paru`) prompts natively (when `false`, appends `--noconfirm` to supported transactions) | `true` |
+| `DRY_RUN` | Simulates execution without modifying packages or system state | `false` |
 
 ## ⌨ Keyboard Shortcuts
 
@@ -64,8 +88,11 @@ Commands never take over your terminal. They run on a pseudo-terminal **inside t
 - output streams live, with progress bars rendered sanely
 - sudo password prompts and pacman `[Y/n]` work right in the pane
 - the border is **cyan** while running, **green** on success, **red** on failure
-- `ctrl+c` interrupts · `pgup` / `pgdn` browse scrollback
+- `ctrl+c` sends terminal interrupt; forced cancellation reaps children cleanly without PID recycling risks
+- `pgup` / `pgdn` browse scrollback
 - launching from any sub-screen returns you to the dashboard while it runs
+
+> ℹ **Note on interactive cancellation**: While package operations and AUR helpers respond immediately to `ctrl+c`, `reflector` currently does not cleanly exit on terminal interrupt within the embedded runner and should be allowed to finish or terminated externally.
 
 ## 📦 Installation
 
@@ -120,24 +147,30 @@ archman --help
 
 ```
 pacman-utils/
-├── Cargo.toml            # package manifest — archman, ratatui + crossterm
+├── Cargo.toml            # package manifest — archman v2.1.0
 ├── Cargo.lock            # locked dependency versions
 ├── install.sh            # builds (release), then asks to install to /usr/local/bin
 ├── snapshot.png          # dashboard screenshot
 ├── LICENSE               # GPL-2.0
+├── .github/
+│   └── workflows/
+│       └── ci.yml        # CI workflow (formatting, linting, tests, release build)
 └── src/
     ├── main.rs           # entry point: CLI flags, terminal lifecycle, panic hook
     ├── app.rs            # App core: screen stack, modals, toasts, event loop, command queue
+    ├── cmd.rs            # centralized command engine (CommandSpec, CommandEngine, execution modes)
+    ├── tx.rs             # transaction layer: specifications, preflight checks, preview generation
+    ├── pty.rs            # hardened pseudo-terminal execution for embedded commands
     ├── widgets.rs        # logo, menus, fuzzy lists, text viewers, theme helpers, cheatsheet
     ├── settings.rs       # ~/.config/archman — settings, favorites, activity log
     ├── sys.rs            # pacman / AUR / reflector wrappers, capability detection, background jobs
-    ├── pty.rs            # pseudo-terminal execution for embedded commands
     ├── fuzzy.rs          # subsequence fuzzy matcher
     └── screens/
         ├── mod.rs           # module registry + shared helpers
         ├── registry.rs      # declarative category → action table (the whole UI surface)
         ├── home.rs          # two-pane dashboard (sidebar + action pane)
         ├── runpane.rs       # embedded command runner pane
+        ├── preview.rs       # transaction preflight & preview modal screen
         ├── install.rs       # install packages — fuzzy search, details, review, install
         ├── search.rs        # search official repos + AUR
         ├── remove.rs        # remove packages (-R / -Rs / -Rns)
@@ -161,7 +194,7 @@ pacman-utils/
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-Run `cargo test` before submitting — the suite covers settings, fuzzy matching, the PTY layer and the runner pane. Full guidelines, code conventions and the "adding a feature" walkthrough live in [CONTRIBUTING.md](CONTRIBUTING.md).
+Run `cargo test` before submitting — the suite covers settings, fuzzy matching, preflight validation, transactions, the PTY layer, and the runner pane. Full guidelines, code conventions and the "adding a feature" walkthrough live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🛡 Security
 

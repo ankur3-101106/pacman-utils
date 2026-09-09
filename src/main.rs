@@ -6,11 +6,13 @@
 // ──────────────────────────────────────────────────────────────────────
 
 mod app;
+pub mod cmd;
 mod fuzzy;
 mod pty;
 mod screens;
 mod settings;
 mod sys;
+pub mod tx;
 mod widgets;
 
 use std::io;
@@ -21,7 +23,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     match std::env::args().nth(1).as_deref() {

@@ -19,10 +19,11 @@ use crate::widgets::{self, kv_table, Menu, Sev};
 
 use super::args;
 
-const ROOT_ITEMS: [&str; 7] = [
+const ROOT_ITEMS: [&str; 8] = [
     "🔧 Change AUR Helper",
     "🧪 Toggle Dry-Run Mode",
     "✅ Toggle Confirm Actions",
+    "🛡 Toggle Native Pkg-Mgr Confirm",
     "📝 Toggle Logging",
     "📦 Set Cache Keep Count",
     "🔄 Reset to Defaults",
@@ -47,6 +48,7 @@ struct Snapshot {
     aur_helper: String,
     dry_run: String,
     confirm_actions: String,
+    native_confirm: String,
     log_enabled: String,
     keep: String,
 }
@@ -54,11 +56,18 @@ struct Snapshot {
 impl Snapshot {
     fn from_app(app: &App) -> Self {
         let s = app.settings();
-        let on_off = |k: &str| if s.is_true(k) { "true".to_string() } else { "false".to_string() };
+        let on_off = |k: &str| {
+            if s.is_true(k) {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        };
         Self {
             aur_helper: s.get("AUR_HELPER").to_string(),
             dry_run: on_off("DRY_RUN"),
             confirm_actions: on_off("CONFIRM_ACTIONS"),
+            native_confirm: on_off("NATIVE_CONFIRM"),
             log_enabled: on_off("LOG_ENABLED"),
             keep: s.get("PACCACHE_KEEP").to_string(),
         }
@@ -82,10 +91,7 @@ impl SettingsScreen {
         Box::new(Self {
             mode: Mode::Root,
             root: root_menu(),
-            aur_menu: Menu::new(
-                "AUR helper",
-                vec!["yay".to_string(), "paru".to_string()],
-            ),
+            aur_menu: Menu::new("AUR helper", vec!["yay".to_string(), "paru".to_string()]),
             snapshot: Snapshot::from_app(app),
             await_kind: None,
         })
@@ -99,6 +105,33 @@ impl SettingsScreen {
         } else {
             app.toast(format!("{key} disabled"), Sev::Info);
         }
+    }
+
+    fn build_helper(&self, app: &mut App, choice: String) {
+        app.toast("Installing build dependencies...", Sev::Info);
+        let deps_args =
+            crate::sys::sudo_pacman_args(app.settings(), &["-S", "--needed", "git", "base-devel"]);
+        app.queue_ext(
+            ExtCmd::new("deps-buildtools", "sudo", &deps_args).note("Install git and base-devel"),
+        );
+        let tag = format!("build-{choice}");
+        let noconfirm_flag = if !app.settings().is_true("NATIVE_CONFIRM") {
+            " --noconfirm"
+        } else {
+            ""
+        };
+        let script = format!(
+            "tmp=$(mktemp -d); git clone https://aur.archlinux.org/{choice}.git \"$tmp/{choice}\" && (cd \"$tmp/{choice}\" && makepkg -si{noconfirm_flag}); rm -rf \"$tmp\""
+        );
+        app.queue_ext(
+            ExtCmd::new(&tag, "bash", &args(&["-c", &script]))
+                .note(format!("Build and install {choice} from AUR"))
+                .result(
+                    format!("Installed and set AUR helper to {choice}"),
+                    format!("Failed to build {choice} from AUR."),
+                    "SETTINGS: AUR helper build finished",
+                ),
+        );
     }
 }
 
@@ -121,16 +154,27 @@ impl Screen for SettingsScreen {
                             self.snapshot = Snapshot::from_app(app);
                         }
                         3 => {
-                            Self::toggle(app, "LOG_ENABLED");
+                            Self::toggle(app, "NATIVE_CONFIRM");
                             self.snapshot = Snapshot::from_app(app);
                         }
                         4 => {
+                            Self::toggle(app, "LOG_ENABLED");
+                            self.snapshot = Snapshot::from_app(app);
+                        }
+                        5 => {
                             self.await_kind = Some(Await::CacheKeep);
                             app.ask_input("Number of versions to keep (1-10)");
                         }
-                        5 => {
-                            app.confirm("Reset all settings to defaults?", true);
-                            self.await_kind = Some(Await::ResetDefaults);
+                        6 => {
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm("Reset all settings to defaults?", true);
+                                self.await_kind = Some(Await::ResetDefaults);
+                            } else {
+                                app.settings_mut().reset_defaults();
+                                app.settings().save();
+                                self.snapshot = Snapshot::from_app(app);
+                                app.toast("Settings reset to defaults.", Sev::Success);
+                            }
                         }
                         _ => app.pop(),
                     },
@@ -151,8 +195,12 @@ impl Screen for SettingsScreen {
                             app.toast(format!("AUR helper set to {choice}"), Sev::Success);
                         } else {
                             app.toast(format!("{choice} is not installed."), Sev::Error);
-                            app.confirm(format!("Install {choice}?"), false);
-                            self.await_kind = Some(Await::BuildHelper(choice));
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm(format!("Install {choice}?"), false);
+                                self.await_kind = Some(Await::BuildHelper(choice));
+                            } else {
+                                self.build_helper(app, choice);
+                            }
                         }
                         self.snapshot = Snapshot::from_app(app);
                         self.mode = Mode::Root;
@@ -165,7 +213,7 @@ impl Screen for SettingsScreen {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
-        let rows = Layout::vertical([Constraint::Length(12), Constraint::Fill(1)]).split(area);
+        let rows = Layout::vertical([Constraint::Length(13), Constraint::Fill(1)]).split(area);
         let snap = &self.snapshot;
         kv_table(
             f,
@@ -175,13 +223,17 @@ impl Screen for SettingsScreen {
                 ("AUR Helper", snap.aur_helper.clone()),
                 ("Dry-Run Mode", snap.dry_run.clone()),
                 ("Confirm Actions", snap.confirm_actions.clone()),
+                ("Native Pkg-Mgr Confirm", snap.native_confirm.clone()),
                 ("Logging", snap.log_enabled.clone()),
                 ("Cache Keep", format!("{} versions", snap.keep)),
                 (
                     "Config File",
                     crate::settings::settings_file().display().to_string(),
                 ),
-                ("Log File", crate::settings::log_file().display().to_string()),
+                (
+                    "Log File",
+                    crate::settings::log_file().display().to_string(),
+                ),
             ],
         );
         match self.mode {
@@ -195,9 +247,11 @@ impl Screen for SettingsScreen {
     }
 
     fn on_input(&mut self, app: &mut App, value: String) {
-        let Some(await_kind) = self.await_kind.take() else { return };
-        match await_kind {
-            Await::CacheKeep => match value.trim().parse::<u32>() {
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
+        if let Await::CacheKeep = await_kind {
+            match value.trim().parse::<u32>() {
                 Ok(n) if (1..=10).contains(&n) => {
                     app.settings_mut().set("PACCACHE_KEEP", n.to_string());
                     app.settings().save();
@@ -208,13 +262,14 @@ impl Screen for SettingsScreen {
                     );
                 }
                 _ => app.toast("Invalid number. Please enter 1-10.", Sev::Error),
-            },
-            _ => {}
+            }
         }
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(await_kind) = self.await_kind.take() else { return };
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
         match await_kind {
             Await::ResetDefaults => {
                 if !yes {
@@ -229,29 +284,7 @@ impl Screen for SettingsScreen {
                 if !yes {
                     return;
                 }
-                app.toast("Installing build dependencies...", Sev::Info);
-                app.queue_ext(
-                    ExtCmd::new(
-                        "deps-buildtools",
-                        "sudo",
-                        &args(&["pacman", "-S", "--needed", "git", "base-devel", "--noconfirm"]),
-                    )
-                    .note("Install git and base-devel")
-                    ,
-                );
-                let tag = format!("build-{choice}");
-                let script = format!(
-                    "tmp=$(mktemp -d); git clone https://aur.archlinux.org/{choice}.git \"$tmp/{choice}\" && (cd \"$tmp/{choice}\" && makepkg -si --noconfirm); rm -rf \"$tmp\""
-                );
-                app.queue_ext(
-                    ExtCmd::new(&tag, "bash", &args(&["-c", &script]))
-                        .note(format!("Build and install {choice} from AUR"))
-                        .result(
-                            format!("Installed and set AUR helper to {choice}"),
-                            format!("Failed to build {choice} from AUR."),
-                            "SETTINGS: AUR helper build finished",
-                        ),
-                );
+                self.build_helper(app, choice);
             }
             _ => {}
         }
@@ -266,7 +299,10 @@ impl Screen for SettingsScreen {
                     app.settings_mut().set("AUR_HELPER", choice.to_string());
                     app.settings().save();
                     self.snapshot = Snapshot::from_app(app);
-                    app.toast(format!("Installed and set AUR helper to {choice}"), Sev::Success);
+                    app.toast(
+                        format!("Installed and set AUR helper to {choice}"),
+                        Sev::Success,
+                    );
                 } else {
                     app.toast(format!("Failed to install {choice}."), Sev::Error);
                 }
@@ -294,22 +330,33 @@ impl DepsCheckScreen {
         let paru = sys::has_bin("paru");
 
         let push_row = |lines: &mut Vec<Vec<Span>>, name: &str, desc: &str, present: bool| {
-            let (icon, style) =
-                if present { ("✔", widgets::success()) } else { ("⚠", widgets::warning()) };
+            let (icon, style) = if present {
+                ("✔", widgets::success())
+            } else {
+                ("⚠", widgets::warning())
+            };
             lines.push(vec![
                 widgets::span(format!("{icon} "), style),
                 widgets::span(name.to_string(), widgets::accent_bold()),
                 widgets::span(format!(" — {desc}"), Style::new()),
             ]);
             if !present {
-                lines.push(vec![widgets::span("     not installed".to_string(), widgets::dim())]);
+                lines.push(vec![widgets::span(
+                    "     not installed".to_string(),
+                    widgets::dim(),
+                )]);
             }
         };
 
         push_row(&mut lines, "yay", "AUR helper", yay);
         push_row(&mut lines, "paru", "alternative AUR helper", paru);
         push_row(&mut lines, "reflector", "mirror management", caps.reflector);
-        push_row(&mut lines, "paccache", "cache cleaning (pacman-contrib)", caps.paccache);
+        push_row(
+            &mut lines,
+            "paccache",
+            "cache cleaning (pacman-contrib)",
+            caps.paccache,
+        );
         push_row(
             &mut lines,
             "checkupdates",
@@ -326,7 +373,33 @@ impl DepsCheckScreen {
             missing.push("pacman-contrib".into());
         }
 
-        Box::new(Self { lines, missing, await_install: false })
+        Box::new(Self {
+            lines,
+            missing,
+            await_install: false,
+        })
+    }
+}
+
+impl DepsCheckScreen {
+    fn install_deps(&self, app: &mut App) {
+        if self.missing.is_empty() {
+            return;
+        }
+        let missing = self.missing.clone();
+        let mut raw = vec!["-S", "--needed"];
+        let missing_refs: Vec<&str> = missing.iter().map(String::as_str).collect();
+        raw.extend(missing_refs);
+        let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &raw);
+        app.queue_ext(
+            ExtCmd::new("deps-install", "sudo", &cmd_args)
+                .note(format!("Install {}", missing.join(", ")))
+                .result(
+                    "Dependencies installed.",
+                    "Dependency installation failed.",
+                    "SETTINGS: dependencies finished",
+                ),
+        );
     }
 }
 
@@ -336,7 +409,11 @@ impl Screen for DepsCheckScreen {
     fn poll(&mut self, app: &mut App) {
         if !self.await_install && !self.missing.is_empty() && !app.modal_open() {
             self.await_install = true;
-            app.confirm("Install missing dependencies?", false);
+            if app.settings().is_true("CONFIRM_ACTIONS") {
+                app.confirm("Install missing dependencies?", false);
+            } else {
+                self.install_deps(app);
+            }
         }
     }
 
@@ -344,7 +421,11 @@ impl Screen for DepsCheckScreen {
         let block = widgets::panel("🔍 Dependency Check");
         let inner = block.inner(area);
         f.render_widget(block, area);
-        let styled: Vec<ratatui::text::Line> = self.lines.iter().map(|l| ratatui::text::Line::from(l.clone())).collect();
+        let styled: Vec<ratatui::text::Line> = self
+            .lines
+            .iter()
+            .map(|l| ratatui::text::Line::from(l.clone()))
+            .collect();
         f.render_widget(ratatui::widgets::Paragraph::new(styled), inner);
     }
 
@@ -356,19 +437,7 @@ impl Screen for DepsCheckScreen {
         if !yes || self.missing.is_empty() {
             return;
         }
-        let missing = self.missing.clone();
-        let mut cmd_args = vec!["-S".to_string(), "--needed".to_string()];
-        cmd_args.extend(missing.clone());
-        cmd_args.push("--noconfirm".to_string());
-        app.queue_ext(
-            ExtCmd::new("deps-install", "sudo", &cmd_args)
-                .note(format!("Install {}", missing.join(", ")))
-                .result(
-                    "Dependencies installed.",
-                    "Dependency installation failed.",
-                    "SETTINGS: dependencies finished",
-                ),
-        );
+        self.install_deps(app);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {

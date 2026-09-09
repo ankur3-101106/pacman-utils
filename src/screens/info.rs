@@ -77,7 +77,9 @@ impl InfoScreen {
 }
 
 fn count_of(flag: &[&str]) -> usize {
-    sys::capture("pacman", flag).map(|s| s.lines().count()).unwrap_or(0)
+    sys::capture("pacman", flag)
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
 }
 
 impl Screen for InfoScreen {
@@ -114,7 +116,10 @@ impl Screen for InfoScreen {
 
         let section = |f: &mut Frame<'_>, rect: Rect, title: &str, rows_kv: Vec<(&str, String)>| {
             let width = rows_kv.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-            let mut lines: Vec<Line> = vec![Line::from(widgets::span(format!("  ── {title} ──"), widgets::dim()))];
+            let mut lines: Vec<Line> = vec![Line::from(widgets::span(
+                format!("  ── {title} ──"),
+                widgets::dim(),
+            ))];
             for (k, v) in rows_kv {
                 lines.push(Line::from(vec![
                     widgets::span(format!("  {k:<width$} │ "), widgets::accent_bold()),
@@ -156,7 +161,10 @@ impl Screen for InfoScreen {
         if info.orphan_pkgs > 0 {
             pkg_rows.push((
                 "⚠",
-                format!("{} orphan packages found. Consider cleaning them.", info.orphan_pkgs),
+                format!(
+                    "{} orphan packages found. Consider cleaning them.",
+                    info.orphan_pkgs
+                ),
             ));
         }
         section(f, rows[2], "Packages", pkg_rows);
@@ -168,7 +176,9 @@ impl Screen for InfoScreen {
             vec![
                 (
                     "Cache Size",
-                    info.cache_size.map(sys::human_size).unwrap_or_else(|| "unknown".into()),
+                    info.cache_size
+                        .map(sys::human_size)
+                        .unwrap_or_else(|| "unknown".into()),
                 ),
                 ("Disk Usage", info.disk_usage.clone()),
             ],

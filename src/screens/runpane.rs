@@ -17,8 +17,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::ExtCmd;
-use crate::pty::{PtyChild, PtyEvent};
+use crate::cmd::{CommandEngine, CommandError, CommandSpec, InteractiveChild};
+use crate::pty::PtyEvent;
 use crate::widgets;
 
 const MAX_LINES: usize = 5000;
@@ -122,7 +122,7 @@ pub struct RunPane {
     title: String,
     tag: String,
     emu: TermEmu,
-    child: Option<PtyChild>,
+    child: Option<InteractiveChild>,
     phase: Phase,
     /// Scrollback distance from the tail (false = follow live output).
     scroll: usize,
@@ -133,13 +133,22 @@ pub struct RunPane {
 }
 
 impl RunPane {
-    pub fn new(cmd: &ExtCmd, rows: u16, cols: u16) -> std::io::Result<Box<Self>> {
+    #[allow(dead_code)]
+    pub fn new(cmd: &CommandSpec, rows: u16, cols: u16) -> Result<Box<Self>, CommandError> {
+        Self::with_engine(&CommandEngine::default(), cmd, rows, cols)
+    }
+
+    pub fn with_engine(
+        engine: &CommandEngine,
+        cmd: &CommandSpec,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Box<Self>, CommandError> {
         let stdin_data = match &cmd.stdin_file {
             Some(path) => std::fs::read(path).ok(),
-            None => None,
+            None => cmd.stdin_data.clone(),
         };
-        let child =
-            crate::pty::spawn(&cmd.program.clone(), &cmd.args, rows.max(2), cols.max(4))?;
+        let child = engine.spawn_interactive(cmd, rows.max(2), cols.max(4))?;
         Ok(Box::new(Self {
             title: cmd.note.clone(),
             tag: cmd.tag.clone(),
@@ -175,27 +184,47 @@ impl RunPane {
         if !self.stdin_flushed {
             if let Some(data) = self.pending_stdin.take() {
                 if let Some(child) = self.child.as_ref() {
-                    child.write_all(&data);
-                    child.write_all(b"\n");
+                    child.write_input(&data);
+                    child.write_input(b"\n");
                 }
             }
             self.stdin_flushed = true;
         }
 
         let mut exited: Option<i32> = None;
+        let mut disconnected = false;
         if let Some(child) = self.child.as_ref() {
             loop {
-                match child.rx.try_recv() {
+                match child.try_recv() {
                     Ok(PtyEvent::Output(bytes)) => self.emu.feed(&bytes),
                     Ok(PtyEvent::Exited(code)) => {
                         exited = Some(code);
+                        let status = InteractiveChild::exit_status_from_code(code);
+                        child.log_exit(status);
                         break;
                     }
-                    Err(_) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
                 }
             }
         }
         if let Some(code) = exited {
+            self.emu.feed(b"\n");
+            self.child = None;
+            self.phase = Phase::Done(code);
+        } else if disconnected {
+            let code = self
+                .child
+                .as_ref()
+                .and_then(|c| c.exit_code())
+                .unwrap_or(-1);
+            if let Some(child) = self.child.as_ref() {
+                let status = InteractiveChild::exit_status_from_code(code);
+                child.log_exit(status);
+            }
             self.emu.feed(b"\n");
             self.child = None;
             self.phase = Phase::Done(code);
@@ -205,6 +234,9 @@ impl RunPane {
     /// Forward a keypress to the child as raw terminal input.
     fn forward(&mut self, key: KeyEvent) {
         let Some(child) = &self.child else { return };
+        if child.is_reaped() {
+            return;
+        }
         let bytes: Vec<u8> = match key.code {
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -228,7 +260,7 @@ impl RunPane {
             KeyCode::Left => vec![0x1b, b'[', b'D'],
             _ => return,
         };
-        child.write_all(&bytes);
+        child.write_input(&bytes);
     }
 
     /// Route a keypress: scroll keys stay local, everything else goes
@@ -286,6 +318,11 @@ impl RunPane {
                     .alignment(ratatui::layout::Alignment::Right),
             );
         let inner = block.inner(area);
+        if inner.height > 0 && inner.width > 0 {
+            if let Some(child) = self.child.as_ref() {
+                let _ = child.resize(inner.height, inner.width);
+            }
+        }
         // Wipe whatever the dashboard painted here before we overlay —
         // otherwise stale action-list text bleeds through the pane.
         f.render_widget(ratatui::widgets::Clear, inner);
@@ -330,16 +367,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn make(code: i32) -> Box<RunPane> {
-        let cmd = ExtCmd {
-            tag: "t".into(),
-            program: "sh".into(),
-            args: vec!["-c".into(), format!("exit {code}")],
-            stdin_file: None,
-            note: "unit test command".into(),
-            ok_msg: None,
-            fail_msg: None,
-            done_log: None,
-        };
+        let cmd = ExtCmd::new("t", "sh", &["-c".into(), format!("exit {code}")])
+            .note("unit test command");
         RunPane::new(&cmd, 24, 80).unwrap()
     }
 
@@ -392,8 +421,49 @@ mod tests {
     fn running_pane_has_cyan_border_and_hint() {
         let mut pane = make(0); // exits quickly; draw before that
         let buf = render(&mut pane);
-        assert!(has_fg(&buf, Color::Cyan) || pane.result().is_some(),
-                "no cyan border cell");
+        assert!(
+            has_fg(&buf, Color::Cyan) || pane.result().is_some(),
+            "no cyan border cell"
+        );
+    }
+
+    #[test]
+    fn channel_disconnect_cannot_leave_runpane_running() {
+        // Spawn a process that we forcibly kill, which closes channel
+        let cmd = ExtCmd::new("t", "sh", &["-c".into(), "sleep 60".into()]).note("disconnect test");
+        let mut pane = RunPane::new(&cmd, 24, 80).unwrap();
+        assert!(pane.is_running());
+
+        // Forcibly kill the underlying child process
+        if let Some(child) = pane.child.as_ref() {
+            child.kill();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && pane.is_running() {
+            pane.poll();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(
+            !pane.is_running(),
+            "runpane remained running after kill/disconnect"
+        );
+        assert!(pane.result().is_some());
+    }
+
+    #[test]
+    fn exit_processed_exactly_once() {
+        let mut pane = make(0);
+        wait_done(&mut pane);
+        assert!(!pane.is_running());
+        assert_eq!(pane.result(), Some(true));
+
+        // Subsequent polls must be idempotent and safe
+        pane.poll();
+        pane.poll();
+        assert!(!pane.is_running());
+        assert_eq!(pane.result(), Some(true));
     }
 }
 
@@ -408,16 +478,8 @@ mod overlay_tests {
     /// the same rect, not let it bleed through around short output.
     #[test]
     fn runner_clears_background_text() {
-        let cmd = ExtCmd {
-            tag: "t".into(),
-            program: "sh".into(),
-            args: vec!["-c".into(), "echo prompt-line".into()],
-            stdin_file: None,
-            note: "runner title".into(),
-            ok_msg: None,
-            fail_msg: None,
-            done_log: None,
-        };
+        let cmd =
+            ExtCmd::new("t", "sh", &["-c".into(), "echo prompt-line".into()]).note("runner title");
         let mut pane = RunPane::new(&cmd, 24, 80).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline && pane.is_running() {
@@ -439,9 +501,18 @@ mod overlay_tests {
         })
         .unwrap();
 
-        let text: String = term.backend().buffer().content.iter().map(|c| c.symbol().to_string()).collect();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
         assert!(!text.contains("keep recent"), "stale text bled through");
-        assert!(!text.contains("Uninstalled Caches"), "stale text bled through");
+        assert!(
+            !text.contains("Uninstalled Caches"),
+            "stale text bled through"
+        );
         assert!(text.contains("prompt-line"), "output missing");
     }
 }

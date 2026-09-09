@@ -59,8 +59,7 @@ impl Screen for SearchScreen {
                         app.toast("No packages found in repositories.", Sev::Warn);
                         app.pop();
                     } else {
-                        self.choose =
-                            Some(FuzzyList::new("Search packages...", items));
+                        self.choose = Some(FuzzyList::new("Search packages...", items));
                     }
                 }
                 None => self.list_job = Some(job),
@@ -79,6 +78,11 @@ impl Screen for SearchScreen {
     }
 
     fn help_hints(&self) -> Vec<&'static str> {
-        vec!["type to filter", "↑↓ navigate", "enter info/install", "esc back"]
+        vec![
+            "type to filter",
+            "↑↓ navigate",
+            "enter info/install",
+            "esc back",
+        ]
     }
 }

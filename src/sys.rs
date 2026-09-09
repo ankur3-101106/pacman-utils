@@ -10,9 +10,10 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::Instant;
+
+use crate::cmd::{CommandEngine, CommandSpec};
 
 // ── Constants (mirroring the bash version) ──────────────────────────
 
@@ -24,28 +25,126 @@ pub const CACHE_DIR: &str = "/var/cache/pacman/pkg";
 
 /// The 12 curated package groups from lib/groups.sh.
 pub const PKG_GROUPS: [(&str, &str, &[&str]); 12] = [
-    ("gnome", "GNOME Desktop Environment", &["gnome", "gnome-extra", "gdm", "gnome-tweaks"]),
-    ("kde", "KDE Plasma Desktop", &["plasma", "kde-applications", "sddm"]),
-    ("hyprland", "Hyprland Wayland Compositor",
-        &["hyprland", "waybar", "wofi", "kitty", "swaybg", "swaylock", "mako", "grim", "slurp"]),
-    ("sway", "Sway Wayland Compositor",
-        &["sway", "swaylock", "swayidle", "waybar", "wofi", "foot", "mako", "grim", "slurp"]),
-    ("i3", "i3 Window Manager",
-        &["i3-wm", "i3status", "i3lock", "dmenu", "alacritty", "picom", "feh", "dunst"]),
-    ("dev", "Development Essentials",
-        &["base-devel", "git", "nodejs", "npm", "python", "python-pip", "go", "rustup", "docker", "docker-compose"]),
-    ("gaming", "Gaming (Steam, Lutris, Wine)",
-        &["steam", "lutris", "wine-staging", "gamemode", "lib32-mesa", "lib32-vulkan-icd-loader", "mangohud"]),
-    ("multimedia", "Multimedia (Video, Audio, Graphics)",
-        &["vlc", "obs-studio", "gimp", "inkscape", "audacity", "ffmpeg", "mpv", "imagemagick"]),
-    ("networking", "Networking Tools",
-        &["networkmanager", "nm-connection-editor", "openssh", "curl", "wget", "nmap", "wireshark-qt"]),
-    ("fonts", "Essential Fonts",
-        &["ttf-dejavu", "ttf-liberation", "noto-fonts", "noto-fonts-cjk", "noto-fonts-emoji", "ttf-fira-code", "ttf-jetbrains-mono"]),
-    ("terminal", "Terminal Power Tools",
-        &["zsh", "fish", "starship", "tmux", "neovim", "htop", "btop", "bat", "eza", "fd", "ripgrep", "fzf", "gum"]),
-    ("security", "Security Tools",
-        &["ufw", "gufw", "clamav", "firejail", "keepassxc", "gnupg"]),
+    (
+        "gnome",
+        "GNOME Desktop Environment",
+        &["gnome", "gnome-extra", "gdm", "gnome-tweaks"],
+    ),
+    (
+        "kde",
+        "KDE Plasma Desktop",
+        &["plasma", "kde-applications", "sddm"],
+    ),
+    (
+        "hyprland",
+        "Hyprland Wayland Compositor",
+        &[
+            "hyprland", "waybar", "wofi", "kitty", "swaybg", "swaylock", "mako", "grim", "slurp",
+        ],
+    ),
+    (
+        "sway",
+        "Sway Wayland Compositor",
+        &[
+            "sway", "swaylock", "swayidle", "waybar", "wofi", "foot", "mako", "grim", "slurp",
+        ],
+    ),
+    (
+        "i3",
+        "i3 Window Manager",
+        &[
+            "i3-wm",
+            "i3status",
+            "i3lock",
+            "dmenu",
+            "alacritty",
+            "picom",
+            "feh",
+            "dunst",
+        ],
+    ),
+    (
+        "dev",
+        "Development Essentials",
+        &[
+            "base-devel",
+            "git",
+            "nodejs",
+            "npm",
+            "python",
+            "python-pip",
+            "go",
+            "rustup",
+            "docker",
+            "docker-compose",
+        ],
+    ),
+    (
+        "gaming",
+        "Gaming (Steam, Lutris, Wine)",
+        &[
+            "steam",
+            "lutris",
+            "wine-staging",
+            "gamemode",
+            "lib32-mesa",
+            "lib32-vulkan-icd-loader",
+            "mangohud",
+        ],
+    ),
+    (
+        "multimedia",
+        "Multimedia (Video, Audio, Graphics)",
+        &[
+            "vlc",
+            "obs-studio",
+            "gimp",
+            "inkscape",
+            "audacity",
+            "ffmpeg",
+            "mpv",
+            "imagemagick",
+        ],
+    ),
+    (
+        "networking",
+        "Networking Tools",
+        &[
+            "networkmanager",
+            "nm-connection-editor",
+            "openssh",
+            "curl",
+            "wget",
+            "nmap",
+            "wireshark-qt",
+        ],
+    ),
+    (
+        "fonts",
+        "Essential Fonts",
+        &[
+            "ttf-dejavu",
+            "ttf-liberation",
+            "noto-fonts",
+            "noto-fonts-cjk",
+            "noto-fonts-emoji",
+            "ttf-fira-code",
+            "ttf-jetbrains-mono",
+        ],
+    ),
+    (
+        "terminal",
+        "Terminal Power Tools",
+        &[
+            "zsh", "fish", "starship", "tmux", "neovim", "htop", "btop", "bat", "eza", "fd",
+            "ripgrep", "fzf", "gum",
+        ],
+    ),
+    (
+        "security",
+        "Security Tools",
+        &["ufw", "gufw", "clamav", "firejail", "keepassxc", "gnupg"],
+    ),
 ];
 
 // ── Capabilities ────────────────────────────────────────────────────
@@ -103,9 +202,10 @@ pub fn get_aur_helper(settings: &crate::settings::Settings) -> Option<String> {
 
 /// Run a command and return its trimmed stdout, or None on failure.
 pub fn capture(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
-    if out.status.success() {
-        Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    let spec = CommandSpec::capture(program, args);
+    let res = CommandEngine::default().run_capture(&spec).ok()?;
+    if res.is_success() {
+        Some(res.stdout_trimmed())
     } else {
         None
     }
@@ -182,7 +282,12 @@ pub fn ss(term: &str) -> Vec<String> {
 /// AUR search result lines starting with `aur/`.
 pub fn aur_ss(helper: &str, term: &str) -> Vec<String> {
     match capture(helper, &["-Ss", term]) {
-        Some(s) => s.lines().filter(|l| l.starts_with("aur/")).take(20).map(str::to_string).collect(),
+        Some(s) => s
+            .lines()
+            .filter(|l| l.starts_with("aur/"))
+            .take(20)
+            .map(str::to_string)
+            .collect(),
         None => Vec::new(),
     }
 }
@@ -190,18 +295,20 @@ pub fn aur_ss(helper: &str, term: &str) -> Vec<String> {
 /// Files owned by an installed package.
 pub fn ql_files(pkg: &str) -> Vec<String> {
     match capture("pacman", &["-Ql", pkg]) {
-        Some(s) => s.lines().filter_map(|l| l.splitn(2, ' ').nth(1)).map(str::to_string).collect(),
+        Some(s) => s
+            .lines()
+            .filter_map(|l| l.split_once(' ').map(|x| x.1.to_string()))
+            .collect(),
         None => Vec::new(),
     }
 }
 
 /// `pacman -Qo` — Ok(owner message) or Err(stderr).
 pub fn qo(path: &str) -> Result<String, String> {
-    match Command::new("pacman").args(["-Qo", path]).output() {
-        Ok(out) if out.status.success() => {
-            Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
-        }
-        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim_end().to_string()),
+    let spec = CommandSpec::capture("pacman", &["-Qo", path]);
+    match CommandEngine::default().run_capture(&spec) {
+        Ok(res) if res.is_success() => Ok(res.stdout_trimmed()),
+        Ok(res) => Err(res.stderr_trimmed()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -293,9 +400,7 @@ pub fn history_entries(limit: usize) -> Vec<(LogKind, String)> {
     let kinds = ["installed", "upgraded", "removed"];
     let entries: Vec<(LogKind, String)> = read_pacman_log()
         .into_iter()
-        .filter(|l| {
-            l.contains("[ALPM]") && kinds.iter().any(|k| l.contains(&format!("] {k} ")))
-        })
+        .filter(|l| l.contains("[ALPM]") && kinds.iter().any(|k| l.contains(&format!("] {k} "))))
         .map(|l| {
             let kind = if l.contains("] installed ") {
                 LogKind::Installed
@@ -426,7 +531,11 @@ impl<T: Send + 'static> Job<T> {
         std::thread::spawn(move || {
             let _ = tx.send(f());
         });
-        Self { rx, label: label.into(), started: Instant::now() }
+        Self {
+            rx,
+            label: label.into(),
+            started: Instant::now(),
+        }
     }
 
     /// Returns the job's result once the worker thread finished it.
@@ -461,14 +570,12 @@ pub fn uptime_pretty() -> String {
 pub fn pacman_version() -> String {
     capture("pacman", &["--version"])
         .and_then(|out| {
-            out.lines()
-                .find(|l| l.contains("Pacman"))
-                .and_then(|l| {
-                    let idx = l.find('v')?;
-                    let rest = &l[idx..];
-                    let end = rest.find(' ').unwrap_or(rest.len());
-                    Some(rest[..end].to_string())
-                })
+            out.lines().find(|l| l.contains("Pacman")).and_then(|l| {
+                let idx = l.find('v')?;
+                let rest = &l[idx..];
+                let end = rest.find(' ').unwrap_or(rest.len());
+                Some(rest[..end].to_string())
+            })
         })
         .unwrap_or_else(|| "unknown".into())
 }
@@ -533,6 +640,217 @@ pub fn sys_brief() -> SysBrief {
         })
         .unwrap_or_else(|| "n/a".into());
 
-    SysBrief { cpu, ram, disk, gpu }
+    SysBrief {
+        cpu,
+        ram,
+        disk,
+        gpu,
+    }
 }
 
+// ── Native Confirmation and Argument Builders ───────────────────────
+
+/// Returns true if the given arguments represent a pacman transaction that
+/// surfaces native package transaction confirmation and accepts `--noconfirm`.
+///
+/// Operations covered:
+/// - `-S` (package installation)
+/// - `-R` / `-Rns` / `-Rs` / `-Rdd` / etc. (package removal)
+/// - `-U` (local package installation)
+/// - `-Syu` / `-Syyu` (system upgrade transactions)
+///
+/// Operations excluded:
+/// - Database refresh without upgrade (`-Sy`, `-Syy`)
+/// - Cache cleaning (`-Sc`, `-Scc`)
+/// - Queries (`-Q*`, `-Ss`, `-Si`, `-Sl`, etc.)
+/// - Commands with `--print`
+pub fn supports_noconfirm<S: AsRef<str>>(args: &[S]) -> bool {
+    let mut is_tx = false;
+    let mut is_excluded = false;
+
+    for arg in args {
+        let s = arg.as_ref();
+        if s == "--print" {
+            is_excluded = true;
+        }
+        if s.starts_with('-') && !s.starts_with("--") {
+            let chars = &s[1..];
+            if chars.starts_with('Q') {
+                return false;
+            }
+            if chars.starts_with('D') || chars.starts_with('F') || chars.starts_with('T') {
+                return false;
+            }
+            if chars.starts_with('R') || chars.starts_with('U') {
+                is_tx = true;
+            }
+            if chars.starts_with('S') {
+                if chars.contains('s')
+                    || chars.contains('i')
+                    || chars.contains('l')
+                    || chars.contains('c')
+                    || (chars.contains('y') && !chars.contains('u'))
+                {
+                    is_excluded = true;
+                } else {
+                    is_tx = true;
+                }
+            }
+        }
+    }
+
+    is_tx && !is_excluded
+}
+
+/// Construct the argument vector for pacman.
+///
+/// Does NOT include the "pacman" executable prefix.
+/// If NATIVE_CONFIRM is false and the command supports --noconfirm, appends --noconfirm.
+/// Ensures --noconfirm is never duplicated.
+pub fn pacman_args<S: AsRef<str>>(settings: &crate::settings::Settings, args: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = args.iter().map(|a| a.as_ref().to_string()).collect();
+    if !settings.is_true("NATIVE_CONFIRM")
+        && supports_noconfirm(args)
+        && !out.iter().any(|a| a == "--noconfirm")
+    {
+        out.push("--noconfirm".to_string());
+    }
+    out
+}
+
+/// Convenience helper for `sudo pacman` command invocations.
+/// Prepends `"pacman"` to the argument list returned by [`pacman_args`].
+pub fn sudo_pacman_args<S: AsRef<str>>(
+    settings: &crate::settings::Settings,
+    args: &[S],
+) -> Vec<String> {
+    let mut out = vec!["pacman".to_string()];
+    out.extend(pacman_args(settings, args));
+    out
+}
+
+/// Construct the argument vector for AUR helpers (e.g. yay/paru).
+///
+/// Does NOT include the helper executable prefix.
+/// If NATIVE_CONFIRM is false and the command supports --noconfirm, appends --noconfirm.
+/// Ensures --noconfirm is never duplicated.
+pub fn aur_args<S: AsRef<str>>(settings: &crate::settings::Settings, args: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = args.iter().map(|a| a.as_ref().to_string()).collect();
+    if !settings.is_true("NATIVE_CONFIRM")
+        && supports_noconfirm(args)
+        && !out.iter().any(|a| a == "--noconfirm")
+    {
+        out.push("--noconfirm".to_string());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+
+    #[test]
+    fn test_supports_noconfirm() {
+        // Transactions that prompt confirmation
+        assert!(supports_noconfirm(&["-S", "foo"]));
+        assert!(supports_noconfirm(&["-Syu"]));
+        assert!(supports_noconfirm(&["-Syyu"]));
+        assert!(supports_noconfirm(&["-Rns", "foo"]));
+        assert!(supports_noconfirm(&["-R", "foo"]));
+        assert!(supports_noconfirm(&["-Rs", "foo"]));
+        assert!(supports_noconfirm(&["-Rdd", "foo"]));
+        assert!(supports_noconfirm(&["-U", "pkg.pkg.tar.zst"]));
+
+        // Non-transactions / excluded operations
+        assert!(!supports_noconfirm(&["-Sy"]));
+        assert!(!supports_noconfirm(&["-Syy"]));
+        assert!(!supports_noconfirm(&["-Sc"]));
+        assert!(!supports_noconfirm(&["-Scc"]));
+        assert!(!supports_noconfirm(&["-Qi", "foo"]));
+        assert!(!supports_noconfirm(&["-Qs", "foo"]));
+        assert!(!supports_noconfirm(&["-Ss", "foo"]));
+        assert!(!supports_noconfirm(&["-Si", "foo"]));
+        assert!(!supports_noconfirm(&["-Sl"]));
+        assert!(!supports_noconfirm(&["-Slq"]));
+        assert!(!supports_noconfirm(&["-S", "foo", "--print"]));
+    }
+
+    #[test]
+    fn test_pacman_args_vectors() {
+        let mut settings = Settings::default();
+        // Default: NATIVE_CONFIRM = true
+        assert_eq!(pacman_args(&settings, &["-S", "foo"]), vec!["-S", "foo"]);
+        assert_eq!(pacman_args(&settings, &["-Syu"]), vec!["-Syu"]);
+        assert_eq!(
+            pacman_args(&settings, &["-Rns", "foo"]),
+            vec!["-Rns", "foo"]
+        );
+
+        // NATIVE_CONFIRM = false
+        settings.set("NATIVE_CONFIRM", "false");
+        assert_eq!(
+            pacman_args(&settings, &["-S", "foo"]),
+            vec!["-S", "foo", "--noconfirm"]
+        );
+        assert_eq!(
+            pacman_args(&settings, &["-Syu"]),
+            vec!["-Syu", "--noconfirm"]
+        );
+        assert_eq!(
+            pacman_args(&settings, &["-Rns", "foo"]),
+            vec!["-Rns", "foo", "--noconfirm"]
+        );
+        assert_eq!(
+            pacman_args(&settings, &["-U", "pkg.pkg.tar.zst"]),
+            vec!["-U", "pkg.pkg.tar.zst", "--noconfirm"]
+        );
+        // Excluded:
+        assert_eq!(pacman_args(&settings, &["-Qi", "foo"]), vec!["-Qi", "foo"]);
+        assert_eq!(pacman_args(&settings, &["-Sy"]), vec!["-Sy"]);
+        assert_eq!(pacman_args(&settings, &["-Syy"]), vec!["-Syy"]);
+        assert_eq!(pacman_args(&settings, &["-Sc"]), vec!["-Sc"]);
+        assert_eq!(pacman_args(&settings, &["-Scc"]), vec!["-Scc"]);
+        assert_eq!(
+            pacman_args(&settings, &["-S", "foo", "--print"]),
+            vec!["-S", "foo", "--print"]
+        );
+
+        // Never duplicate --noconfirm
+        assert_eq!(
+            pacman_args(&settings, &["-S", "foo", "--noconfirm"]),
+            vec!["-S", "foo", "--noconfirm"]
+        );
+    }
+
+    #[test]
+    fn test_sudo_pacman_args() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            sudo_pacman_args(&settings, &["-S", "foo"]),
+            vec!["pacman", "-S", "foo"]
+        );
+
+        settings.set("NATIVE_CONFIRM", "false");
+        assert_eq!(
+            sudo_pacman_args(&settings, &["-S", "foo"]),
+            vec!["pacman", "-S", "foo", "--noconfirm"]
+        );
+    }
+
+    #[test]
+    fn test_aur_args() {
+        let mut settings = Settings::default();
+        assert_eq!(aur_args(&settings, &["-S", "foo"]), vec!["-S", "foo"]);
+
+        settings.set("NATIVE_CONFIRM", "false");
+        assert_eq!(
+            aur_args(&settings, &["-S", "foo"]),
+            vec!["-S", "foo", "--noconfirm"]
+        );
+        assert_eq!(
+            aur_args(&settings, &["-S", "foo", "--noconfirm"]),
+            vec!["-S", "foo", "--noconfirm"]
+        );
+    }
+}

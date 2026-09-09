@@ -67,7 +67,12 @@ mod tests {
     use super::*;
 
     fn items() -> Vec<String> {
-        vec!["linux".into(), "linux-headers".into(), "firefox".into(), "nodejs-lts-hydrogen".into()]
+        vec![
+            "linux".into(),
+            "linux-headers".into(),
+            "firefox".into(),
+            "nodejs-lts-hydrogen".into(),
+        ]
     }
 
     #[test]

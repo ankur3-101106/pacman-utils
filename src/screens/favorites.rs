@@ -27,7 +27,10 @@ enum Mode {
 
 enum Await {
     Add,
-    InstallBatch { official: Vec<String>, aur: Vec<String> },
+    InstallBatch {
+        official: Vec<String>,
+        aur: Vec<String>,
+    },
 }
 
 pub struct FavoritesScreen {
@@ -66,7 +69,11 @@ fn write_favs(favs: &[String]) {
     if let Some(dir) = favorites_file().parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let body = if favs.is_empty() { String::new() } else { favs.join("\n") + "\n" };
+    let body = if favs.is_empty() {
+        String::new()
+    } else {
+        favs.join("\n") + "\n"
+    };
     let _ = std::fs::write(favorites_file(), body);
 }
 
@@ -89,12 +96,66 @@ impl FavoritesScreen {
     }
 
     /// Split targets into official/AUR with one local `pacman -Si` call,
-    /// then open the confirm modal.
+    /// then open the confirm modal or execute directly.
     fn start_batch(&mut self, app: &mut App, targets: Vec<String>, what: &str) {
         app.log(&format!("FAVORITES: Installing {what}"));
         let (official, aur) = sys::filter_official(&targets);
-        app.confirm(format!("Install {what}?"), false);
-        self.await_kind = Some(Await::InstallBatch { official, aur });
+        if app.settings().is_true("CONFIRM_ACTIONS") {
+            app.confirm(format!("Install {what}?"), false);
+            self.await_kind = Some(Await::InstallBatch { official, aur });
+        } else {
+            self.execute_batch(app, official, aur);
+        }
+    }
+
+    fn execute_batch(&mut self, app: &mut App, official: Vec<String>, aur: Vec<String>) {
+        let has_official = !official.is_empty();
+        let has_aur = !aur.is_empty();
+
+        if has_official {
+            let n = official.len();
+            app.toast(format!("Installing {n} official packages..."), Sev::Info);
+            let mut raw = vec!["-S", "--needed"];
+            let off_refs: Vec<&str> = official.iter().map(String::as_str).collect();
+            raw.extend(off_refs);
+            let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &raw);
+            app.queue_ext(ExtCmd::new("fav-official", "sudo", &cmd_args).result(
+                "Official favorites installed.",
+                "Official favorites installation failed.",
+                "FAVORITES: official batch finished",
+            ));
+        }
+        if has_aur {
+            let n = aur.len();
+            match app.aur_helper() {
+                Some(helper) => {
+                    app.toast(
+                        format!("Installing {n} AUR packages via {helper}..."),
+                        Sev::Info,
+                    );
+                    let mut raw = vec!["-S", "--needed"];
+                    let aur_refs: Vec<&str> = aur.iter().map(String::as_str).collect();
+                    raw.extend(aur_refs);
+                    let cmd_args = crate::sys::aur_args(app.settings(), &raw);
+                    app.queue_ext(ExtCmd::new("fav-aur", &helper, &cmd_args).result(
+                        "Favorites installation complete!",
+                        "AUR favorites installation failed.",
+                        "FAVORITES: batch finished",
+                    ));
+                }
+                None => {
+                    app.toast(
+                        format!("Skipping {n} AUR packages — no AUR helper found."),
+                        Sev::Warn,
+                    );
+                    app.log("FAVORITES: skipped AUR packages (no helper)");
+                }
+            }
+        }
+        if !has_official && !has_aur {
+            app.toast("Favorites installation complete!", Sev::Success);
+            app.log("FAVORITES: Installation complete");
+        }
     }
 }
 
@@ -156,7 +217,11 @@ impl Screen for FavoritesScreen {
                                     );
                                 } else {
                                     let n = missing.len();
-                                    self.start_batch(app, missing, &format!("{n} missing packages"));
+                                    self.start_batch(
+                                        app,
+                                        missing,
+                                        &format!("{n} missing packages"),
+                                    );
                                 }
                             }
                         }
@@ -194,9 +259,11 @@ impl Screen for FavoritesScreen {
         }
 
         // Favorites overview + action menu.
-        let rows =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(MENU_ITEMS.len() as u16 + 2)])
-                .split(area);
+        let rows = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(MENU_ITEMS.len() as u16 + 2),
+        ])
+        .split(area);
 
         let title = format!("⭐  Favorite Packages ({})", self.favs.len());
         let block = widgets::panel(&title);
@@ -236,7 +303,9 @@ impl Screen for FavoritesScreen {
     }
 
     fn on_input(&mut self, app: &mut App, value: String) {
-        let Some(await_kind) = self.await_kind.take() else { return };
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
         if !matches!(await_kind, Await::Add) {
             return;
         }
@@ -244,7 +313,7 @@ impl Screen for FavoritesScreen {
         if pkg.is_empty() {
             return;
         }
-        if self.favs.iter().any(|p| *p == pkg) {
+        if self.favs.contains(&pkg) {
             app.toast(format!("{pkg} is already in favorites."), Sev::Warn);
             return;
         }
@@ -255,52 +324,16 @@ impl Screen for FavoritesScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(await_kind) = self.await_kind.take() else { return };
-        let Await::InstallBatch { official, aur } = await_kind else { return };
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
+        let Await::InstallBatch { official, aur } = await_kind else {
+            return;
+        };
         if !yes {
             return;
         }
-        let has_official = !official.is_empty();
-        let has_aur = !aur.is_empty();
-
-        if has_official {
-            let n = official.len();
-            app.toast(format!("Installing {n} official packages..."), Sev::Info);
-            let mut cmd_args = vec!["-S".to_string(), "--needed".to_string()];
-            cmd_args.extend(official);
-            app.queue_ext(
-                ExtCmd::new("fav-official", "sudo", &cmd_args).result(
-                    "Official favorites installed.",
-                    "Official favorites installation failed.",
-                    "FAVORITES: official batch finished",
-                ),
-            );
-        }
-        if has_aur {
-            let n = aur.len();
-            match app.aur_helper() {
-                Some(helper) => {
-                    app.toast(format!("Installing {n} AUR packages via {helper}..."), Sev::Info);
-                    let mut cmd_args = vec!["-S".to_string(), "--needed".to_string()];
-                    cmd_args.extend(aur);
-                    app.queue_ext(
-                    ExtCmd::new("fav-aur", &helper, &cmd_args).result(
-                        "Favorites installation complete!",
-                        "AUR favorites installation failed.",
-                        "FAVORITES: batch finished",
-                    ),
-                );
-                }
-                None => {
-                    app.toast(format!("Skipping {n} AUR packages — no AUR helper found."), Sev::Warn);
-                    app.log("FAVORITES: skipped AUR packages (no helper)");
-                }
-            }
-        }
-        if !has_official && !has_aur {
-            app.toast("Favorites installation complete!", Sev::Success);
-            app.log("FAVORITES: Installation complete");
-        }
+        self.execute_batch(app, official, aur);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {

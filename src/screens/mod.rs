@@ -11,6 +11,7 @@ pub mod install;
 pub mod lockfile;
 pub mod mirrors;
 pub mod packages;
+pub mod preview;
 pub mod registry;
 pub mod remove;
 pub mod runpane;
@@ -20,6 +21,7 @@ pub mod update;
 pub mod viewer;
 
 pub use home::HomeScreen;
+pub use preview::PreviewScreen;
 
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -35,7 +37,7 @@ pub fn info_lines(raw: &str, fields: &[&str]) -> Vec<Vec<Span<'static>>> {
             if key.is_empty() {
                 continue;
             }
-            if fields.is_empty() || fields.iter().any(|f| *f == key) {
+            if fields.is_empty() || fields.contains(&key) {
                 out.push(vec![
                     crate::widgets::span(format!("  {key:<18}"), crate::widgets::accent_bold()),
                     Span::styled(value.trim().to_string(), Style::new()),

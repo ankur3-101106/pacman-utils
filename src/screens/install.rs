@@ -22,10 +22,15 @@ use crate::app::{App, ExtCmd, Screen};
 use crate::sys::{self, Job};
 use crate::widgets::{self, FuzzyList, Sev};
 
-use super::{args, info_lines};
+use super::info_lines;
 
-const OFFICIAL_FIELDS: [&str; 5] =
-    ["Name", "Version", "Repository", "Description", "Download Size"];
+const OFFICIAL_FIELDS: [&str; 5] = [
+    "Name",
+    "Version",
+    "Repository",
+    "Description",
+    "Download Size",
+];
 const AUR_FIELDS: [&str; 5] = ["Name", "Version", "Description", "Maintainer", "Votes"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +40,7 @@ enum Mode {
     Choosing,
     Resolving,
     ShowingInfo,
+    #[allow(dead_code)]
     DryRunPreview,
     PickingSimilar,
 }
@@ -46,10 +52,20 @@ enum Source {
 }
 
 /// Result of the background repo/AUR resolution.
+#[allow(clippy::enum_variant_names)]
 enum Found {
-    Official { pkg: String, raw: String },
-    Aur { pkg: String, raw: String },
-    NotFound { official: Vec<String>, aur: Vec<String> },
+    Official {
+        pkg: String,
+        raw: String,
+    },
+    Aur {
+        pkg: String,
+        raw: String,
+    },
+    NotFound {
+        official: Vec<String>,
+        aur: Vec<String>,
+    },
 }
 
 struct InfoView {
@@ -58,6 +74,7 @@ struct InfoView {
     lines: Vec<Vec<Span<'static>>>,
 }
 
+#[allow(dead_code)]
 enum Pending {
     Official(String),
     Aur(String),
@@ -111,7 +128,11 @@ impl InstallScreen {
             }))
         };
         Self {
-            mode: if preselect { Mode::Resolving } else { Mode::LoadingList },
+            mode: if preselect {
+                Mode::Resolving
+            } else {
+                Mode::LoadingList
+            },
             aur_helper: helper,
             choose: empty_choose(),
             similar: empty_similar(),
@@ -140,7 +161,10 @@ impl InstallScreen {
                 }
                 Found::NotFound {
                     official: sys::ss(&pkg),
-                    aur: helper.as_ref().map(|h| sys::aur_ss(h, &pkg)).unwrap_or_default(),
+                    aur: helper
+                        .as_ref()
+                        .map(|h| sys::aur_ss(h, &pkg))
+                        .unwrap_or_default(),
                 }
             },
         ));
@@ -154,35 +178,60 @@ impl InstallScreen {
             self.mode = Mode::Choosing;
         }
     }
+
+    fn execute_install(&mut self, app: &mut App, pending: Pending) {
+        match pending {
+            Pending::Official(pkg) => {
+                self.last_install_pkg = Some(pkg.clone());
+                app.log(&format!("INSTALL: Installing {pkg} from official repos"));
+                let cmd_args = crate::sys::sudo_pacman_args(app.settings(), &["-S", &pkg]);
+                app.queue_ext(
+                    ExtCmd::new("install-official", "sudo", &cmd_args)
+                        .note(format!("Install {pkg}"))
+                        .result(
+                            format!("{pkg} installed successfully!"),
+                            "Installation failed.",
+                            "INSTALL: official install finished",
+                        ),
+                );
+            }
+            Pending::Aur(pkg) => {
+                self.last_install_pkg = Some(pkg.clone());
+                if let Some(helper) = app.aur_helper() {
+                    app.log(&format!("INSTALL: Installing {pkg} from AUR via {helper}"));
+                    let cmd_args = crate::sys::aur_args(app.settings(), &["-S", &pkg]);
+                    app.queue_ext(
+                        ExtCmd::new("install-aur", &helper, &cmd_args)
+                            .note(format!("Install {pkg} from AUR via {helper}"))
+                            .result(
+                                format!("{pkg} installed successfully!"),
+                                "Installation failed.",
+                                "INSTALL: AUR install finished",
+                            ),
+                    );
+                } else {
+                    app.toast("No AUR helper found.", Sev::Error);
+                    self.finish(app);
+                }
+            }
+        }
+    }
 }
 
 /// Shared with search/groups flows: queue an install for one package,
 /// official repos first, then AUR.
 pub fn install_specific_package(app: &mut App, pkg: &str) {
     if sys::si(&[pkg]).is_some() {
-        app.log(&format!("INSTALL: Installing {pkg} from official repos"));
-        app.queue_ext(
-            ExtCmd::new("install-specific-official", "sudo", &args(&["pacman", "-S", pkg]))
-                .note(format!("Install {pkg}"))
-                .result(
-                    format!("{pkg} installed successfully!"),
-                    "Installation failed.",
-                    "INSTALL: official install finished",
-                ),
-        );
+        let tx = crate::tx::TransactionSpec::install_official(app.settings(), pkg);
+        app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
     } else if let Some(helper) = app.aur_helper() {
-        app.log(&format!("INSTALL: Installing {pkg} from AUR via {helper}"));
-        app.queue_ext(
-            ExtCmd::new("install-specific-aur", &helper, &args(&["-S", pkg]))
-                .note(format!("Install {pkg} from AUR via {helper}"))
-                .result(
-                    format!("{pkg} installed successfully!"),
-                    "Installation failed.",
-                    "INSTALL: AUR install finished",
-                ),
-        );
+        let tx = crate::tx::TransactionSpec::install_aur(app.settings(), &helper, pkg);
+        app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
     } else {
-        app.toast(format!("Cannot install {pkg} — no AUR helper found."), Sev::Error);
+        app.toast(
+            format!("Cannot install {pkg} — no AUR helper found."),
+            Sev::Error,
+        );
     }
 }
 
@@ -207,26 +256,34 @@ impl Screen for InstallScreen {
             }
             Mode::ShowingInfo => {
                 let source = self.info.as_ref().map(|v| v.source);
-                let pkg = self.info.as_ref().map(|v| v.pkg.clone()).unwrap_or_default();
+                let pkg = self
+                    .info
+                    .as_ref()
+                    .map(|v| v.pkg.clone())
+                    .unwrap_or_default();
                 match key.code {
                     KeyCode::Enter => match source {
                         Some(Source::Official) => {
-                            if app.settings().is_true("DRY_RUN") {
-                                self.dryrun_lines =
-                                    sys::capture("pacman", &["-S", "--print", &pkg])
-                                        .map(|out| out.lines().map(str::to_string).collect())
-                                        .unwrap_or_else(|| {
-                                            vec!["(dry-run preview unavailable)".to_string()]
-                                        });
-                                self.mode = Mode::DryRunPreview;
-                            } else {
-                                app.confirm(format!("Install {pkg}?"), false);
-                                self.pending = Some(Pending::Official(pkg));
-                            }
+                            self.last_install_pkg = Some(pkg.clone());
+                            let tx =
+                                crate::tx::TransactionSpec::install_official(app.settings(), &pkg);
+                            app.push(Box::new(crate::screens::PreviewScreen::from_app(tx, app)));
                         }
                         Some(Source::Aur) => {
-                            app.confirm(format!("Install {pkg} from AUR?"), false);
-                            self.pending = Some(Pending::Aur(pkg));
+                            if let Some(helper) = app.aur_helper() {
+                                self.last_install_pkg = Some(pkg.clone());
+                                let tx = crate::tx::TransactionSpec::install_aur(
+                                    app.settings(),
+                                    &helper,
+                                    &pkg,
+                                );
+                                app.push(Box::new(crate::screens::PreviewScreen::from_app(
+                                    tx, app,
+                                )));
+                            } else {
+                                app.toast("No AUR helper found.", Sev::Error);
+                                self.finish(app);
+                            }
                         }
                         None => {}
                     },
@@ -234,15 +291,12 @@ impl Screen for InstallScreen {
                     _ => {}
                 }
             }
-            Mode::DryRunPreview => match key.code {
-                KeyCode::Enter => {
-                    let pkg = self.info.as_ref().map(|v| v.pkg.clone()).unwrap_or_default();
-                    app.confirm("Proceed with actual install?", false);
-                    self.pending = Some(Pending::Official(pkg));
+            Mode::DryRunPreview => {
+                // Maintained for backward compatibility; previews now route to PreviewScreen
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+                    self.mode = Mode::ShowingInfo;
                 }
-                KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::ShowingInfo,
-                _ => {}
-            },
+            }
             Mode::PickingSimilar => {
                 if self.similar.handle_key(&key) {
                     return;
@@ -280,8 +334,7 @@ impl Screen for InstallScreen {
                         app.toast("No packages found in repositories.", Sev::Warn);
                         app.pop();
                     } else {
-                        self.choose =
-                            FuzzyList::new("Select package to install...", items);
+                        self.choose = FuzzyList::new("Select package to install...", items);
                         self.mode = Mode::Choosing;
                     }
                 }
@@ -345,7 +398,11 @@ impl Screen for InstallScreen {
                 }
             }
             Mode::DryRunPreview => {
-                let pkg = self.info.as_ref().map(|v| v.pkg.clone()).unwrap_or_default();
+                let pkg = self
+                    .info
+                    .as_ref()
+                    .map(|v| v.pkg.clone())
+                    .unwrap_or_default();
                 let title = format!("🧪 Dry-run preview — would install {pkg}");
                 let text = self.dryrun_lines.clone();
                 render_dry_run(f, area, &title, &text);
@@ -357,7 +414,9 @@ impl Screen for InstallScreen {
         if let Some(job) = &self.list_job {
             return Some((job.label.clone(), job.started));
         }
-        self.resolve_job.as_ref().map(|j| (j.label.clone(), j.started))
+        self.resolve_job
+            .as_ref()
+            .map(|j| (j.label.clone(), j.started))
     }
 
     fn help_hints(&self) -> Vec<&'static str> {
@@ -371,45 +430,15 @@ impl Screen for InstallScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(pending) = self.pending.take() else { return };
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
         if !yes {
             app.toast("Installation cancelled.", Sev::Info);
             self.finish(app);
             return;
         }
-        match pending {
-            Pending::Official(pkg) => {
-                self.last_install_pkg = Some(pkg.clone());
-                app.log(&format!("INSTALL: Installing {pkg} from official repos"));
-                app.queue_ext(
-                    ExtCmd::new("install-official", "sudo", &args(&["pacman", "-S", &pkg]))
-                        .note(format!("Install {pkg}"))
-                        .result(
-                            format!("{pkg} installed successfully!"),
-                            "Installation failed.",
-                            "INSTALL: official install finished",
-                        ),
-                );
-            }
-            Pending::Aur(pkg) => {
-                self.last_install_pkg = Some(pkg.clone());
-                if let Some(helper) = app.aur_helper() {
-                    app.log(&format!("INSTALL: Installing {pkg} from AUR via {helper}"));
-                    app.queue_ext(
-                        ExtCmd::new("install-aur", &helper, &args(&["-S", &pkg]))
-                            .note(format!("Install {pkg} from AUR via {helper}"))
-                            .result(
-                                format!("{pkg} installed successfully!"),
-                                "Installation failed.",
-                                "INSTALL: AUR install finished",
-                            ),
-                    );
-                } else {
-                    app.toast("No AUR helper found.", Sev::Error);
-                    self.finish(app);
-                }
-            }
-        }
+        self.execute_install(app, pending);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
@@ -468,4 +497,164 @@ fn render_dry_run(f: &mut Frame<'_>, area: Rect, title: &str, lines: &[String]) 
         .alignment(Alignment::Center),
         rows[1],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_test_screen(pkg: &str) -> InstallScreen {
+        InstallScreen {
+            mode: Mode::ShowingInfo,
+            aur_helper: None,
+            choose: empty_choose(),
+            similar: empty_similar(),
+            info: Some(InfoView {
+                pkg: pkg.to_string(),
+                source: Source::Official,
+                lines: Vec::new(),
+            }),
+            dryrun_lines: Vec::new(),
+            list_job: None,
+            resolve_job: None,
+            pending: None,
+            last_install_pkg: None,
+            back_after_done: false,
+        }
+    }
+
+    #[test]
+    fn test_install_confirm_actions_false_native_confirm_true() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("CONFIRM_ACTIONS", "false");
+        app.settings_mut().set("NATIVE_CONFIRM", "true");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+
+        // PreviewScreen is pushed onto stack; press enter to proceed
+        app.on_key(enter);
+
+        // Invariant: CONFIRM_ACTIONS=false skips modal
+        assert!(!app.has_modal(), "Archman modal should not be shown");
+        assert!(app.modal_prompt().is_none());
+
+        // Invariant: NATIVE_CONFIRM=true does NOT append --noconfirm
+        let queued = app.pending_cmd().expect("command should be queued");
+        assert_eq!(queued.program, "sudo");
+        assert_eq!(queued.args, vec!["pacman", "-S", "ripgrep"]);
+        assert!(!queued.args.contains(&"--noconfirm".to_string()));
+    }
+
+    #[test]
+    fn test_install_confirm_actions_false_native_confirm_false() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("CONFIRM_ACTIONS", "false");
+        app.settings_mut().set("NATIVE_CONFIRM", "false");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+
+        // PreviewScreen is pushed onto stack; press enter to proceed
+        app.on_key(enter);
+
+        assert!(!app.has_modal());
+        let queued = app.pending_cmd().expect("command should be queued");
+        assert_eq!(queued.program, "sudo");
+        assert_eq!(queued.args, vec!["pacman", "-S", "ripgrep", "--noconfirm"]);
+    }
+
+    #[test]
+    fn test_install_confirm_actions_true_native_confirm_true() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("CONFIRM_ACTIONS", "true");
+        app.settings_mut().set("NATIVE_CONFIRM", "true");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+
+        // PreviewScreen is pushed onto stack; press enter to proceed to confirmation
+        app.on_key(enter);
+
+        // Modal should be shown
+        assert!(app.has_modal());
+        assert_eq!(app.modal_prompt(), Some("Install ripgrep?"));
+        assert!(app.pending_cmd().is_none());
+
+        // Accepting confirmation executes without --noconfirm
+        app.on_key(KeyEvent::from(KeyCode::Char('y')));
+        let queued = app.pending_cmd().expect("command should be queued");
+        assert_eq!(queued.program, "sudo");
+        assert_eq!(queued.args, vec!["pacman", "-S", "ripgrep"]);
+        assert!(!queued.args.contains(&"--noconfirm".to_string()));
+    }
+
+    #[test]
+    fn test_install_confirm_actions_true_native_confirm_false() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("CONFIRM_ACTIONS", "true");
+        app.settings_mut().set("NATIVE_CONFIRM", "false");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+
+        // PreviewScreen is pushed onto stack; press enter to proceed to confirmation
+        app.on_key(enter);
+
+        // Modal should be shown
+        assert!(app.has_modal());
+        assert_eq!(app.modal_prompt(), Some("Install ripgrep?"));
+        assert!(app.pending_cmd().is_none());
+
+        // Accepting confirmation executes WITH --noconfirm because NATIVE_CONFIRM=false
+        app.on_key(KeyEvent::from(KeyCode::Char('y')));
+        let queued = app.pending_cmd().expect("command should be queued");
+        assert_eq!(queued.program, "sudo");
+        assert_eq!(queued.args, vec!["pacman", "-S", "ripgrep", "--noconfirm"]);
+    }
+
+    #[test]
+    fn test_install_modal_cancellation() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("CONFIRM_ACTIONS", "true");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+        app.on_key(enter);
+
+        assert!(app.has_modal());
+
+        // Reject confirmation with 'n'
+        app.on_key(KeyEvent::from(KeyCode::Char('n')));
+        assert!(!app.has_modal());
+        assert_eq!(app.pending_len(), 0);
+    }
+
+    #[test]
+    fn test_install_dry_run_full_flow() {
+        let mut app = App::new();
+        app.set_preflight_env(crate::tx::PreflightEnv::mock());
+        app.settings_mut().set("DRY_RUN", "true");
+
+        let mut screen = make_test_screen("ripgrep");
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        screen.handle_key(&mut app, enter);
+
+        // PreviewScreen is pushed; press Enter
+        app.on_key(enter);
+
+        // DRY_RUN pops without queueing any command
+        assert_eq!(app.pending_len(), 0);
+    }
 }

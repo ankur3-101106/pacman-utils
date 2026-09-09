@@ -8,7 +8,6 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -63,60 +62,10 @@ pub trait Screen {
 
 // ── External command spec ───────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct ExtCmd {
-    /// Routing key delivered back via [`Screen::on_ext_done`].
-    pub tag: String,
-    pub program: String,
-    pub args: Vec<String>,
-    pub stdin_file: Option<PathBuf>,
-    pub note: String,
-    /// Optional result feedback shown by the dashboard when the
-    /// command finishes (used when the queueing screen won't stay
-    /// on the stack).
-    pub ok_msg: Option<String>,
-    pub fail_msg: Option<String>,
-    pub done_log: Option<String>,
-}
-
-impl ExtCmd {
-    pub fn new(tag: &str, program: &str, args: &[String]) -> Self {
-        Self {
-            tag: tag.to_string(),
-            program: program.to_string(),
-            args: args.to_vec(),
-            stdin_file: None,
-            note: format!("{program} {}", args.join(" ")),
-            ok_msg: None,
-            fail_msg: None,
-            done_log: None,
-        }
-    }
-
-    pub fn note(mut self, note: impl Into<String>) -> Self {
-        self.note = note.into();
-        self
-    }
-
-    pub fn stdin_file(mut self, path: PathBuf) -> Self {
-        self.stdin_file = Some(path);
-        self
-    }
-
-    /// Result feedback for commands that outlive their screen.
-    pub fn result(
-        mut self,
-        ok_msg: impl Into<String>,
-        fail_msg: impl Into<String>,
-        done_log: impl Into<String>,
-    ) -> Self {
-        self.ok_msg = Some(ok_msg.into());
-        self.fail_msg = Some(fail_msg.into());
-        self.done_log = Some(done_log.into());
-        self
-    }
-
-}
+#[allow(unused_imports)]
+pub use crate::cmd::{
+    CommandEngine, CommandError, CommandMode, CommandResult, CommandSpec, CommandStatus, ExtCmd,
+};
 
 // ── Modals ──────────────────────────────────────────────────────────
 
@@ -162,6 +111,8 @@ pub struct App {
     pub quit: bool,
     settings: Settings,
     caps: Caps,
+    engine: CommandEngine,
+    preflight_env: Option<crate::tx::PreflightEnv>,
 }
 
 impl Default for App {
@@ -174,6 +125,7 @@ impl App {
     pub fn new() -> Self {
         let settings = Settings::init();
         let caps = Caps::detect();
+        let engine = CommandEngine::default();
         let mut app = Self {
             screens: Vec::new(),
             modal: None,
@@ -190,13 +142,32 @@ impl App {
             quit: false,
             settings,
             caps,
+            engine,
+            preflight_env: None,
         };
-        log_action(&app.settings, &format!("SESSION: archman v{} started", crate::VERSION));
+        log_action(
+            &app.settings,
+            &format!("SESSION: archman v{} started", crate::VERSION),
+        );
         app.push(Box::new(crate::screens::HomeScreen::new()));
         app
     }
 
     // ── Accessors ───────────────────────────────────────────────────
+
+    #[allow(dead_code)]
+    pub fn engine(&self) -> &CommandEngine {
+        &self.engine
+    }
+
+    #[allow(dead_code)]
+    pub fn set_preflight_env(&mut self, env: crate::tx::PreflightEnv) {
+        self.preflight_env = Some(env);
+    }
+
+    pub fn preflight_env(&self) -> Option<&crate::tx::PreflightEnv> {
+        self.preflight_env.as_ref()
+    }
 
     pub fn settings(&self) -> &Settings {
         &self.settings
@@ -244,7 +215,9 @@ impl App {
         let depth_before = self.screens.len();
         self.dispatch_depth = depth_before;
         self.popped_during_dispatch = false;
-        let Some(mut top) = self.screens.pop() else { return };
+        let Some(mut top) = self.screens.pop() else {
+            return;
+        };
         f(&mut top, self);
         if !self.popped_during_dispatch {
             // Insert back at its original position so anything pushed
@@ -257,16 +230,47 @@ impl App {
     // ── Feedback & actions ──────────────────────────────────────────
 
     pub fn toast(&mut self, msg: impl Into<String>, sev: Sev) {
-        self.toast = Some(Toast { msg: msg.into(), sev, born: Instant::now() });
+        self.toast = Some(Toast {
+            msg: msg.into(),
+            sev,
+            born: Instant::now(),
+        });
     }
 
     pub fn confirm(&mut self, prompt: impl Into<String>, danger: bool) {
-        self.modal = Some(Modal::Confirm { prompt: prompt.into(), danger });
+        self.modal = Some(Modal::Confirm {
+            prompt: prompt.into(),
+            danger,
+        });
     }
 
     pub fn ask_input(&mut self, prompt: impl Into<String>) {
         self.input_buffer.clear();
-        self.modal = Some(Modal::Input { prompt: prompt.into() });
+        self.modal = Some(Modal::Input {
+            prompt: prompt.into(),
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn has_modal(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    pub fn modal_prompt(&self) -> Option<&str> {
+        match &self.modal {
+            Some(Modal::Confirm { prompt, .. }) | Some(Modal::Input { prompt }) => Some(prompt),
+            None => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn pending_cmd(&self) -> Option<&ExtCmd> {
+        self.pending.front()
+    }
+
+    #[allow(dead_code)]
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     /// Queue an interactive external command. Executed right after the
@@ -297,7 +301,7 @@ impl App {
 
     // ── Input routing ───────────────────────────────────────────────
 
-    fn on_key(&mut self, key: KeyEvent) {
+    pub fn on_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -437,7 +441,11 @@ impl App {
             Some(Modal::Confirm { prompt, danger }) => {
                 let area = centered_rect(60, 9, f.area());
                 f.render_widget(Clear, area);
-                let style = if danger { widgets::danger() } else { widgets::warning() };
+                let style = if danger {
+                    widgets::danger()
+                } else {
+                    widgets::warning()
+                };
                 let block = Block::new()
                     .borders(Borders::ALL)
                     .border_style(style)
@@ -471,7 +479,7 @@ impl App {
                 ])
                 .split(inner);
 
-                let prompt = self.modal_prompt();
+                let prompt = self.modal_prompt().unwrap_or_default();
                 let value = self.modal_value();
                 f.render_widget(Paragraph::new(Line::from(prompt)), rows[0]);
                 f.render_widget(
@@ -494,23 +502,13 @@ impl App {
         }
     }
 
-    fn modal_prompt(&self) -> String {
-        match &self.modal {
-            Some(Modal::Input { prompt }) => prompt.clone(),
-            _ => String::new(),
-        }
-    }
-
     fn modal_value(&self) -> String {
         self.input_buffer.clone()
     }
 
     // ── Main Loop ───────────────────────────────────────────────────
 
-    pub fn run(
-        &mut self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
@@ -518,18 +516,20 @@ impl App {
             // Serialized: one run pane at a time.
             if !self.ext_active {
                 if let Some(cmd) = self.pending.pop_front() {
-                    let (cols, rows) =
-                        crossterm::terminal::size().unwrap_or((80, 24));
+                    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
                     // Commands always run on the dashboard's side pane:
                     // return there no matter which screen queued them.
                     self.screens.truncate(1);
                     self.embedded_msgs = match (&cmd.ok_msg, &cmd.fail_msg, &cmd.done_log) {
-                        (Some(o), Some(f), Some(l)) => {
-                            Some((o.clone(), f.clone(), l.clone()))
-                        }
+                        (Some(o), Some(f), Some(l)) => Some((o.clone(), f.clone(), l.clone())),
                         _ => None,
                     };
-                    match crate::screens::runpane::RunPane::new(&cmd, rows, cols) {
+                    match crate::screens::runpane::RunPane::with_engine(
+                        &self.engine,
+                        &cmd,
+                        rows,
+                        cols,
+                    ) {
                         Ok(pane) => {
                             self.ext_active = true;
                             self.embedded = Some(pane);
@@ -540,9 +540,7 @@ impl App {
                                 format!("Failed to run {}: {e}", cmd.program),
                                 widgets::Sev::Error,
                             );
-                            self.dispatch(move |screen, app| {
-                                screen.on_ext_done(app, &tag, false)
-                            });
+                            self.dispatch(move |screen, app| screen.on_ext_done(app, &tag, false));
                         }
                     }
                 }
@@ -585,7 +583,11 @@ impl App {
                 }
             }
 
-            if self.toast.as_ref().is_some_and(|t| t.born.elapsed() > TOAST_TTL) {
+            if self
+                .toast
+                .as_ref()
+                .is_some_and(|t| t.born.elapsed() > TOAST_TTL)
+            {
                 self.toast = None;
             }
         }
@@ -659,6 +661,9 @@ mod bleed_tests {
             .position(|c| c.symbol().contains("X"))
             .map(|i| i / buf.area.width as usize)
             .unwrap();
-        assert!(row < buf.area.height as usize - 1, "toast on window bottom row");
+        assert!(
+            row < buf.area.height as usize - 1,
+            "toast on window bottom row"
+        );
     }
 }
