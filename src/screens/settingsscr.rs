@@ -350,6 +350,7 @@ impl DepsCheckScreen {
 
         push_row(&mut lines, "yay", "AUR helper", yay);
         push_row(&mut lines, "paru", "alternative AUR helper", paru);
+        push_row(&mut lines, "brew", "Homebrew package manager", caps.brew);
         push_row(&mut lines, "reflector", "mirror management", caps.reflector);
         push_row(
             &mut lines,

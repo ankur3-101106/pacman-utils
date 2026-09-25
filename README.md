@@ -36,9 +36,9 @@
 | 🛡 | **Preflight & Preview** | Preflight checks (database lock, active PIDs, disk space, privileges, network) and non-destructive transaction previews before execution |
 | ⬆ | **System** | Update check (`checkupdates`), database refresh, full upgrades via pacman or your AUR helper |
 | 🧹 | **Maintenance** | Cache cleaning (`paccache -rkN`, `-Sc`, `-Scc`), safe `db.lck` removal |
-| 🌍 | **Mirrors** | reflector auto-update & ranking, mirrorlist backup/restore |
+| 🌍 | **Mirrors & Repos** | reflector auto-update & ranking, mirrorlist backup/restore, Chaotic-AUR, CachyOS, and BlackArch repository setup |
 | 📊 | **Information** | System dashboard, dependency check with one-key installs |
-| ⭐ | **Extras** | Favorite packages, 12 curated package groups, list import |
+| ⭐ | **Extras** | Favorite packages, 13 curated package groups (incl. BlackArch pentesting tools), list import, Homebrew (brew) installer |
 | ⚙ | **Settings** | AUR helper (yay/paru), dry-run mode, independent confirmation controls, logging, cache retention |
 
 ## 🛡 Preflight Checks & Transaction Preview
@@ -120,6 +120,7 @@ cd pacman-utils
 | `pacman` | ✅ | Core package manager |
 | Rust toolchain | ✅ to build | [rustup](https://rustup.rs) or `sudo pacman -S rust` |
 | `yay` / `paru` | optional | AUR helper |
+| `brew` | optional | Homebrew package manager |
 | `reflector` | optional | Mirror management |
 | `pacman-contrib` | optional | `paccache` + `checkupdates` |
 

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-25
+
+### Added
+- **Chaotic-AUR Repository Enable Option**:
+  - Keyring import/local signing for Chaotic-AUR GPG keys (`FBA220DFC880C036` and `3056513887B78AEB`).
+  - Automated installation of `chaotic-keyring` and `chaotic-mirrorlist`.
+  - Appends `[chaotic-aur]` configuration to `/etc/pacman.conf` with automatic backup (`/etc/pacman.conf.bak`) and database sync (`pacman -Sy`).
+  - Available under `🌍 Mirrors & Repos` on the dashboard and inside the `MirrorsScreen` menu.
+- **CachyOS Optimized Repositories Enable Option**:
+  - Official CachyOS repository setup integrating automated hardware instruction set detection (`x86-64-v3`, `x86-64-v4`, `znver4`).
+  - Installs GPG keyring and mirrorlists, configures `/etc/pacman.conf`, and synchronizes package databases.
+  - Accessible via `🌍 Mirrors & Repos` and inside `MirrorsScreen`.
+- **Homebrew (brew) Installation Option**:
+  - One-click installer for Homebrew on Linux under `⭐ Extras` and reported in `Dependency Check`.
+  - Automates installation of base build dependencies (`base-devel`, `procps-ng`, `curl`, `git`, `file`).
+  - Sets up shell environment integration (`eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"`) in `~/.bashrc` and `~/.zshrc`, with `/usr/local/bin/brew` symlinking.
+- **BlackArch Pentesting Repository & Tool Options**:
+  - One-click enablement for the BlackArch penetration testing repository using official `strap.sh`.
+  - Configures BlackArch keyring, mirrorlist, and updates `/etc/pacman.conf` with database synchronization.
+  - Added new "BlackArch Security & Pentesting Essentials" curated group to Package Groups (nmap, wireshark, aircrack-ng, sqlmap, metasploit, hydra, john, burpsuite, nikto, hashcat).
+  - Accessible via `🌍 Mirrors & Repos` on the dashboard, in `MirrorsScreen`, and under `⭐ Extras ▸ Package Groups`.
+
 ## [2.1.0] - 2026-09-09
 
 ### Added

@@ -94,6 +94,7 @@ Configuration:
 
 Dependencies (optional):
   yay / paru        AUR helper
+  brew              Homebrew package manager
   reflector         Mirror management
   pacman-contrib    Cache cleaning (paccache) and update checks (checkupdates)
 "#

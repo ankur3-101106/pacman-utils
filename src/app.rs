@@ -286,6 +286,7 @@ impl App {
     /// Called by a run pane when its command finished (or was closed):
     /// unblocks the queue and schedules result delivery.
     pub fn complete_ext(&mut self, tag: &str, ok: bool) {
+        self.refresh_caps();
         self.last_ext_result = Some((tag.to_string(), ok));
         self.ext_active = false;
     }

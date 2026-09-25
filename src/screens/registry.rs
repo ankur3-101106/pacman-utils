@@ -86,6 +86,30 @@ fn confirm_paccache(app: &App) -> Option<String> {
     ))
 }
 
+fn confirm_enable_chaotic_aur(app: &App) -> Option<String> {
+    app.settings()
+        .is_true("CONFIRM_ACTIONS")
+        .then(|| "Enable Chaotic-AUR repository (automated pre-built AUR packages)?".to_string())
+}
+
+fn confirm_enable_cachyos_repo(app: &App) -> Option<String> {
+    app.settings().is_true("CONFIRM_ACTIONS").then(|| {
+        "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?".to_string()
+    })
+}
+
+fn confirm_install_brew(app: &App) -> Option<String> {
+    app.settings()
+        .is_true("CONFIRM_ACTIONS")
+        .then(|| "Install Homebrew (brew) package manager for Linux?".to_string())
+}
+
+fn confirm_enable_blackarch(app: &App) -> Option<String> {
+    app.settings()
+        .is_true("CONFIRM_ACTIONS")
+        .then(|| "Enable BlackArch penetration testing repository?".to_string())
+}
+
 // ── Run builders ────────────────────────────────────────────────────
 
 fn build_db_sy(app: &mut App) {
@@ -158,6 +182,74 @@ fn build_cache_scc(app: &mut App) {
     app.queue_ext(
         ExtCmd::new("run-cache-scc", "sudo", &cmd_args).note("Remove ALL cached packages"),
     );
+}
+
+fn build_enable_chaotic_aur(app: &mut App) {
+    crate::screens::mirrors::enable_chaotic_aur(app);
+}
+
+fn build_enable_cachyos_repo(app: &mut App) {
+    crate::screens::mirrors::enable_cachyos(app);
+}
+
+fn build_enable_blackarch(app: &mut App) {
+    crate::screens::mirrors::enable_blackarch(app);
+}
+
+pub fn install_brew(app: &mut App) {
+    app.log("EXTRAS: Installing Homebrew");
+    let script = r#"set -e
+echo "==> [1/3] Ensuring required base build dependencies are installed..."
+sudo pacman -S --needed --noconfirm base-devel procps-ng curl git file
+
+echo "==> [2/3] Installing Homebrew..."
+NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+echo "==> [3/3] Setting up shell environment and PATH integration..."
+BREW_BIN=""
+if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+    BREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
+elif [ -x "$HOME/.linuxbrew/bin/brew" ]; then
+    BREW_BIN="$HOME/.linuxbrew/bin/brew"
+fi
+
+if [ -n "$BREW_BIN" ]; then
+    SHELLENV_CMD="eval \"\$($BREW_BIN shellenv)\""
+
+    if [ -f "$HOME/.bashrc" ] && ! grep -Fq "brew shellenv" "$HOME/.bashrc"; then
+        printf '\n# Homebrew\n%s\n' "$SHELLENV_CMD" >> "$HOME/.bashrc"
+        echo "    Added Homebrew shellenv to ~/.bashrc"
+    fi
+
+    if [ -f "$HOME/.zshrc" ] && ! grep -Fq "brew shellenv" "$HOME/.zshrc"; then
+        printf '\n# Homebrew\n%s\n' "$SHELLENV_CMD" >> "$HOME/.zshrc"
+        echo "    Added Homebrew shellenv to ~/.zshrc"
+    fi
+
+    if [ ! -e "/usr/local/bin/brew" ]; then
+        sudo ln -sf "$BREW_BIN" /usr/local/bin/brew 2>/dev/null || true
+    fi
+
+    echo "==> Verifying Homebrew installation..."
+    eval "$($BREW_BIN shellenv)"
+    brew --version
+fi
+
+echo "==> Homebrew installation finished successfully!"
+"#;
+    app.queue_ext(
+        ExtCmd::new("run-install-brew", "bash", &super::args(&["-c", script]))
+            .note("Install Homebrew (brew)")
+            .result(
+                "Homebrew installed successfully!",
+                "Homebrew installation failed.",
+                "EXTRAS: Homebrew installed",
+            ),
+    );
+}
+
+fn build_install_brew(app: &mut App) {
+    install_brew(app);
 }
 
 fn write_list(path: &std::path::Path, names: Vec<String>) -> Result<usize, String> {
@@ -544,11 +636,52 @@ pub static MAINTENANCE: [ActionDef; 4] = [
     ),
 ];
 
-pub static MIRRORS: [ActionDef; 1] = [action!(
-    "Mirror Management",
-    "Auto-update or rank mirrors with reflector, back up and restore the mirrorlist.",
-    open::mirrors
-)];
+pub static MIRRORS: [ActionDef; 4] = [
+    action!(
+        "Mirror Management",
+        "Auto-update or rank mirrors with reflector, back up and restore the mirrorlist.",
+        open::mirrors
+    ),
+    action!(
+        "Enable Chaotic-AUR Repo",
+        "Import Chaotic-AUR keys, install mirrorlist, and enable pre-built AUR binary repository.",
+        run = run_spec!(
+            "run-enable-chaotic-aur",
+            confirm_enable_chaotic_aur,
+            false,
+            build_enable_chaotic_aur,
+            "Chaotic-AUR repository enabled!",
+            "Failed to enable Chaotic-AUR repository.",
+            "REPO: Chaotic-AUR repository enabled"
+        )
+    ),
+    action!(
+        "Enable CachyOS Repos",
+        "Auto-detect CPU instruction set (v3/v4/zen4) and enable optimized CachyOS repositories.",
+        run = run_spec!(
+            "run-enable-cachyos-repo",
+            confirm_enable_cachyos_repo,
+            false,
+            build_enable_cachyos_repo,
+            "CachyOS repositories enabled!",
+            "Failed to enable CachyOS repositories.",
+            "REPO: CachyOS repositories enabled"
+        )
+    ),
+    action!(
+        "Enable BlackArch Repo",
+        "Import BlackArch GPG keys, configure repository via official strap.sh, and sync database.",
+        run = run_spec!(
+            "run-enable-blackarch",
+            confirm_enable_blackarch,
+            false,
+            build_enable_blackarch,
+            "BlackArch repository enabled!",
+            "Failed to enable BlackArch repository.",
+            "REPO: BlackArch repository enabled"
+        )
+    ),
+];
 
 pub static INFORMATION: [ActionDef; 2] = [
     action!(
@@ -563,7 +696,7 @@ pub static INFORMATION: [ActionDef; 2] = [
     ),
 ];
 
-pub static EXTRAS: [ActionDef; 3] = [
+pub static EXTRAS: [ActionDef; 4] = [
     action!(
         "Favorite Packages",
         "Manage your favorite list and bulk-install it on fresh systems.",
@@ -578,6 +711,19 @@ pub static EXTRAS: [ActionDef; 3] = [
         "Import Package List",
         "Install packages from a pkglist text file via pacman or your AUR helper.",
         open::import
+    ),
+    action!(
+        "Install Homebrew (brew)",
+        "Install Homebrew package manager for Linux and set up shell integration.",
+        run = run_spec!(
+            "run-install-brew",
+            confirm_install_brew,
+            false,
+            build_install_brew,
+            "Homebrew installed successfully!",
+            "Homebrew installation failed.",
+            "EXTRAS: Homebrew installed"
+        )
     ),
 ];
 
@@ -601,7 +747,7 @@ pub static CATEGORIES: [CatDef; 7] = [
         actions: &MAINTENANCE,
     },
     CatDef {
-        title: "🌍 Mirrors",
+        title: "🌍 Mirrors & Repos",
         actions: &MIRRORS,
     },
     CatDef {
@@ -617,3 +763,30 @@ pub static CATEGORIES: [CatDef; 7] = [
         actions: &SETTINGS,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mirrors_actions_include_repos() {
+        assert_eq!(MIRRORS.len(), 4);
+        assert_eq!(MIRRORS[0].label, "Mirror Management");
+        assert_eq!(MIRRORS[1].label, "Enable Chaotic-AUR Repo");
+        assert_eq!(MIRRORS[2].label, "Enable CachyOS Repos");
+        assert_eq!(MIRRORS[3].label, "Enable BlackArch Repo");
+    }
+
+    #[test]
+    fn test_extras_actions_include_brew() {
+        assert_eq!(EXTRAS.len(), 4);
+        assert_eq!(EXTRAS[3].label, "Install Homebrew (brew)");
+    }
+
+    #[test]
+    fn test_categories_count_and_titles() {
+        assert_eq!(CATEGORIES.len(), 7);
+        assert_eq!(CATEGORIES[3].title, "🌍 Mirrors & Repos");
+        assert_eq!(CATEGORIES[5].title, "⭐ Extras");
+    }
+}

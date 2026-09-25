@@ -23,8 +23,8 @@ pub const MIRRORLIST_BACKUP: &str = "/etc/pacman.d/mirrorlist.bak";
 pub const PACMAN_LOG: &str = "/var/log/pacman.log";
 pub const CACHE_DIR: &str = "/var/cache/pacman/pkg";
 
-/// The 12 curated package groups from lib/groups.sh.
-pub const PKG_GROUPS: [(&str, &str, &[&str]); 12] = [
+/// The curated package groups from lib/groups.sh.
+pub const PKG_GROUPS: [(&str, &str, &[&str]); 13] = [
     (
         "gnome",
         "GNOME Desktop Environment",
@@ -145,6 +145,22 @@ pub const PKG_GROUPS: [(&str, &str, &[&str]); 12] = [
         "Security Tools",
         &["ufw", "gufw", "clamav", "firejail", "keepassxc", "gnupg"],
     ),
+    (
+        "blackarch",
+        "BlackArch Security & Pentesting Essentials",
+        &[
+            "nmap",
+            "wireshark-qt",
+            "aircrack-ng",
+            "sqlmap",
+            "metasploit",
+            "hydra",
+            "john",
+            "burpsuite",
+            "nikto",
+            "hashcat",
+        ],
+    ),
 ];
 
 // ── Capabilities ────────────────────────────────────────────────────
@@ -154,6 +170,10 @@ pub struct Caps {
     pub reflector: bool,
     pub paccache: bool,
     pub checkupdates: bool,
+    pub brew: bool,
+    pub chaotic_aur: bool,
+    pub cachyos: bool,
+    pub blackarch: bool,
 }
 
 impl Caps {
@@ -162,8 +182,91 @@ impl Caps {
             reflector: has_bin("reflector"),
             paccache: has_bin("paccache"),
             checkupdates: has_bin("checkupdates"),
+            brew: has_brew(),
+            chaotic_aur: is_chaotic_aur_enabled(),
+            cachyos: is_cachyos_repo_enabled(),
+            blackarch: is_blackarch_enabled(),
         }
     }
+}
+
+/// True if `brew` is found in PATH or in standard Linuxbrew locations.
+pub fn has_brew() -> bool {
+    if has_bin("brew") {
+        return true;
+    }
+    if Path::new("/home/linuxbrew/.linuxbrew/bin/brew").exists() {
+        return true;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if Path::new(&home).join(".linuxbrew/bin/brew").exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if chaotic-aur repository is enabled in pacman configuration text.
+pub fn check_chaotic_aur_in_conf(content: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with("[chaotic-aur]") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if cachyos repositories are enabled in pacman configuration text.
+pub fn check_cachyos_in_conf(content: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with("[cachyos") {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if /etc/pacman.conf contains an uncommented [chaotic-aur] repository.
+pub fn is_chaotic_aur_enabled() -> bool {
+    fs::read_to_string("/etc/pacman.conf")
+        .map(|c| check_chaotic_aur_in_conf(&c))
+        .unwrap_or(false)
+}
+
+/// True if /etc/pacman.conf contains uncommented [cachyos*] repositories.
+pub fn is_cachyos_repo_enabled() -> bool {
+    fs::read_to_string("/etc/pacman.conf")
+        .map(|c| check_cachyos_in_conf(&c))
+        .unwrap_or(false)
+}
+
+/// Check if blackarch repository is enabled in pacman configuration text.
+pub fn check_blackarch_in_conf(content: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with("[blackarch]") {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if /etc/pacman.conf contains an uncommented [blackarch] repository.
+pub fn is_blackarch_enabled() -> bool {
+    fs::read_to_string("/etc/pacman.conf")
+        .map(|c| check_blackarch_in_conf(&c))
+        .unwrap_or(false)
 }
 
 /// True if `name` resolves to an executable on PATH.
@@ -852,5 +955,53 @@ mod tests {
             aur_args(&settings, &["-S", "foo", "--noconfirm"]),
             vec!["-S", "foo", "--noconfirm"]
         );
+    }
+
+    #[test]
+    fn test_chaotic_aur_and_cachyos_detection() {
+        let conf_empty = "";
+        assert!(!check_chaotic_aur_in_conf(conf_empty));
+        assert!(!check_cachyos_in_conf(conf_empty));
+        assert!(!check_blackarch_in_conf(conf_empty));
+
+        let conf_commented = r#"
+# [chaotic-aur]
+# Include = /etc/pacman.d/chaotic-mirrorlist
+# [cachyos]
+# Include = /etc/pacman.d/cachyos-mirrorlist
+# [blackarch]
+# Include = /etc/pacman.d/blackarch-mirrorlist
+"#;
+        assert!(!check_chaotic_aur_in_conf(conf_commented));
+        assert!(!check_cachyos_in_conf(conf_commented));
+        assert!(!check_blackarch_in_conf(conf_commented));
+
+        let conf_active = r#"
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[cachyos-v3]
+Include = /etc/pacman.d/cachyos-v3-mirrorlist
+
+[chaotic-aur]
+Include = /etc/pacman.d/chaotic-mirrorlist
+
+[blackarch]
+Include = /etc/pacman.d/blackarch-mirrorlist
+"#;
+        assert!(check_chaotic_aur_in_conf(conf_active));
+        assert!(check_cachyos_in_conf(conf_active));
+        assert!(check_blackarch_in_conf(conf_active));
+    }
+
+    #[test]
+    fn test_pkg_groups_includes_blackarch() {
+        assert_eq!(PKG_GROUPS.len(), 13);
+        let blackarch_group = PKG_GROUPS.iter().find(|(id, _, _)| *id == "blackarch");
+        assert!(blackarch_group.is_some());
+        let (_, desc, pkgs) = blackarch_group.unwrap();
+        assert!(desc.contains("BlackArch"));
+        assert!(pkgs.contains(&"nmap"));
+        assert!(pkgs.contains(&"metasploit"));
     }
 }
