@@ -96,16 +96,25 @@ Commands never take over your terminal. They run on a pseudo-terminal **inside t
 
 ## 📦 Installation
 
-**1. Via GitHub Releases (Pre-compiled Binary):**
-
-Download the latest `archman` binary from the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page, make it executable, and move it to your PATH:
+**1. Direct Binary Install via `curl` (Fastest):**
 
 ```bash
+sudo curl -fsSL https://github.com/ankur3-101106/pacman-utils/releases/latest/download/archman -o /usr/local/bin/archman && sudo chmod +x /usr/local/bin/archman
+```
+
+Or download to the local directory:
+
+```bash
+curl -fsSL https://github.com/ankur3-101106/pacman-utils/releases/latest/download/archman -o archman
 chmod +x archman
 sudo mv archman /usr/local/bin/
 ```
 
-**2. Build from Source:**
+**2. Via GitHub Releases:**
+
+Download the latest `archman` release binary manually from the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page.
+
+**3. Build from Source:**
 
 ```bash
 git clone https://github.com/ankur3-101106/pacman-utils.git
