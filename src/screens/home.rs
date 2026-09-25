@@ -67,7 +67,7 @@ struct DashRects {
 
 fn dashboard_layout(area: Rect) -> DashRects {
     let outer = Layout::vertical([Constraint::Min(3), Constraint::Length(8)]).split(area);
-    let cols = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).split(outer[0]);
+    let cols = Layout::horizontal([Constraint::Length(32), Constraint::Fill(1)]).split(outer[0]);
     let sidebar = Layout::vertical([
         Constraint::Length(5),
         Constraint::Fill(1),

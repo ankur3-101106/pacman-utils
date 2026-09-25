@@ -525,12 +525,11 @@ const BIG_LOGO: [&str; 6] = [
     "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝",
 ];
 
-/// Header bar: wordmark left, version right.
-/// Compact textual logo for the sidebar (3 rows, 27 cols).
+/// Compact textual logo for the sidebar (3 rows, 30 cols).
 pub const LOGO_SMALL: [&str; 3] = [
-    "▄▀█ █▀█ █▀▀ █░█ ▄▀▄ ▄▀█ █▄█",
-    "█▀█ █▀▄ █░░ █▀█ █░█ █▀█ █░█",
-    "▀ ▀ ▀ ▀ ▀▀▀ ▀░▀ ▀░▀ ▀ ▀ ▀░▀",
+    "▄█▄ █▀█ █▀▀ █ █ █▀▄▀█ ▄█▄ █▄ █",
+    "█▀█ █▀▄ █   █▀█ █ ▀ █ █▀█ █ ▀█",
+    "▀ ▀ ▀ ▀ ▀▀▀ ▀ ▀ ▀   ▀ ▀ ▀ ▀  ▀",
 ];
 
 /// Sidebar logo pane: colored ASCII name + version beneath.
@@ -538,15 +537,14 @@ pub fn render_logo_pane(f: &mut Frame<'_>, area: Rect, version: &str) {
     let rows = Layout::vertical([Constraint::Length(3), Constraint::Length(1)]).split(area);
     let logo: Vec<Line> = LOGO_SMALL
         .iter()
-        .enumerate()
-        .map(|(i, l)| Line::from(span(l.to_string(), styled(cat_color(i + 1)))))
+        .map(|l| Line::from(span(l.to_string(), accent_bold())))
         .collect();
     f.render_widget(Paragraph::new(logo).alignment(Alignment::Center), rows[0]);
     f.render_widget(
-        Paragraph::new(Line::from(span(
-            format!("archman v{version}"),
-            styled(cat_color(5)),
-        )))
+        Paragraph::new(Line::from(vec![
+            span("archman ", dim()),
+            span(format!("v{version}"), accent()),
+        ]))
         .alignment(Alignment::Center),
         rows[1],
     );
