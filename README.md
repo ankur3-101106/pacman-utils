@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.archlinux.org/"><img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" alt="Arch Linux" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" /></a>
-  <img src="https://img.shields.io/badge/Version-2.1.0-green?style=for-the-badge" alt="version" />
+  <img src="https://img.shields.io/badge/Version-2.2.0-green?style=for-the-badge" alt="version" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL_2.0-blue?style=for-the-badge" alt="GPL-2.0" /></a>
 </p>
 
