@@ -1,6 +1,6 @@
 [package]
 name = "archman"
-version = "2.2.0"
+version = "2.2.1"
 edition = "2021"
 description = "Interactive Arch Linux system manager with a ratatui interface"
 license = "GPL-2.0"

@@ -5,21 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-09-25
+
+### Added
+- **Streamlined Repository Submenus (`Add Repositories` & `Remove Repositories`)**:
+  - Replaced repetitive top-level repository actions in Tab 4 (`🌍 Mirrors & Repos`) and `MirrorsScreen` with structured submenus.
+  - Interactive status badges displaying real-time configuration status (`enabled` / `not enabled`) for each repository.
+- **Repository Removal Actions**:
+  - **Chaotic-AUR Removal**: strips `[chaotic-aur]` pacman configuration, purges `chaotic-keyring` & `chaotic-mirrorlist`, deletes GPG keys, and syncs databases.
+  - **CachyOS Removal**: executes official uninstaller (`cachyos-repo.sh --remove`), cleans pacman configuration and mirrorlists, removes keyrings, and refreshes package databases.
+  - **BlackArch Removal**: removes `[blackarch]` pacman directives, purges `blackarch-keyring` & `blackarch-mirrorlist`, and resyncs databases.
+- **Homebrew Uninstallation**:
+  - Added **Uninstall Homebrew (brew)** under `⭐ Extras`.
+  - Executes official uninstaller script non-interactively, strips shellenv integration from `~/.bashrc` and `~/.zshrc`, removes `/usr/local/bin/brew` symlinks, and cleans Linuxbrew directories.
+
 ## [2.2.0] - 2026-09-25
 
 ### Added
-- **Repository Addition & Removal Management**:
-  - Streamlined `🌍 Mirrors & Repos` dashboard action list and `MirrorsScreen` menu with clean **Add Repositories** and **Remove Repositories** submenus, avoiding redundant repetitive entries.
-  - One-click enablement and clean removal for third-party repositories:
-    - **Chaotic-AUR**: automated key import/deletion, `chaotic-keyring` & `chaotic-mirrorlist` install/purge, `/etc/pacman.conf` section configuration and cleanup, and database refresh.
-    - **CachyOS**: official bootstrap installer/uninstaller (`cachyos-repo.sh --remove`), automated CPU instruction set detection (`x86-64-v3/v4/znver4`), keyring and mirrorlist cleanup, and database sync.
-    - **BlackArch**: official `strap.sh` bootstrap, keyring/mirrorlist removal, `/etc/pacman.conf` cleanup, and sync.
+- **Chaotic-AUR Repository Enable Option**:
+  - Keyring import/local signing for Chaotic-AUR GPG keys (`FBA220DFC880C036` and `3056513887B78AEB`).
+  - Automated installation of `chaotic-keyring` and `chaotic-mirrorlist`.
+  - Appends `[chaotic-aur]` configuration to `/etc/pacman.conf` with automatic backup (`/etc/pacman.conf.bak`) and database sync (`pacman -Sy`).
+- **CachyOS Optimized Repositories Enable Option**:
+  - Official CachyOS repository setup integrating automated hardware instruction set detection (`x86-64-v3`, `x86-64-v4`, `znver4`).
+  - Installs GPG keyring and mirrorlists, configures `/etc/pacman.conf`, and synchronizes package databases.
+- **Homebrew (brew) Installation Option**:
+  - One-click installer for Homebrew on Linux under `⭐ Extras` and reported in `Dependency Check`.
+  - Automates installation of base build dependencies (`base-devel`, `procps-ng`, `curl`, `git`, `file`).
+  - Sets up shell environment integration (`eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"`) in `~/.bashrc` and `~/.zshrc`.
+- **BlackArch Pentesting Repository & Tool Options**:
+  - One-click enablement for the BlackArch penetration testing repository using official `strap.sh`.
   - Added new "BlackArch Security & Pentesting Essentials" curated group to Package Groups (`⭐ Extras ▸ Package Groups`).
-- **Homebrew (brew) Installer & Uninstaller**:
-  - One-click installer and uninstaller for Homebrew on Linux under `⭐ Extras`.
-  - Installer automates prerequisite build dependencies (`base-devel`, `procps-ng`, `curl`, `git`, `file`), runs official install script, and sets up shell integration in `~/.bashrc` and `~/.zshrc`.
-  - Uninstaller runs official Homebrew uninstall script with noninteractive bypass, cleans up shell environment integration lines, removes `/usr/local/bin/brew` symlinks, and deletes Linuxbrew directories.
-  - Reported dynamically in `Dependency Check` and `Settings`.
 
 ## [2.1.0] - 2026-09-09
 
