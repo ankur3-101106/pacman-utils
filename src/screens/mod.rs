@@ -14,6 +14,7 @@ pub mod packages;
 pub mod preview;
 pub mod registry;
 pub mod remove;
+pub mod repos;
 pub mod runpane;
 pub mod search;
 pub mod settingsscr;

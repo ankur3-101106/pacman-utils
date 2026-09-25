@@ -19,15 +19,14 @@ use crate::widgets::{self, kv_table, Menu, Sev};
 
 use super::{args, viewer::ViewerScreen};
 
-const MENU_ITEMS: [&str; 9] = [
+const MENU_ITEMS: [&str; 8] = [
     "🔄 Auto-update mirrors (reflector)",
     "🏎  Rank fastest mirrors",
     "📋 Show current mirrors",
     "💾 Backup current mirrorlist",
     "♻  Restore mirrorlist from backup",
-    "🌀 Enable Chaotic-AUR repository",
-    "⚡ Enable CachyOS repositories",
-    "🏴 Enable BlackArch repository",
+    "➕ Add repositories",
+    "➖ Remove repositories",
     "🔙 Back to Main Menu",
 ];
 
@@ -35,9 +34,6 @@ const MENU_ITEMS: [&str; 9] = [
 enum Await {
     InstallReflector,
     RestoreBackup,
-    EnableChaoticAur,
-    EnableCachyos,
-    EnableBlackArch,
 }
 
 #[derive(Clone, Copy)]
@@ -284,6 +280,125 @@ echo "==> BlackArch repository enabled successfully!"
     );
 }
 
+/// Remove Chaotic-AUR repository, mirrorlist, keyrings, and pacman.conf configuration.
+pub fn remove_chaotic_aur(app: &mut App) {
+    app.log("REPO: Removing Chaotic-AUR repository");
+    let script = r#"set -e
+echo "==> [1/4] Removing [chaotic-aur] configuration from /etc/pacman.conf..."
+if grep -q "^\s*\[chaotic-aur\]" /etc/pacman.conf; then
+    cp -a /etc/pacman.conf /etc/pacman.conf.bak
+    sed -i '/^\s*\[chaotic-aur\]/,/^\s*Include\s*=\s*\/etc\/pacman\.d\/chaotic-mirrorlist/d' /etc/pacman.conf
+    sed -i '/^\s*\[chaotic-aur\]/d' /etc/pacman.conf
+    echo "    Removed [chaotic-aur] from /etc/pacman.conf"
+fi
+
+echo "==> [2/4] Removing chaotic-keyring and chaotic-mirrorlist..."
+pacman -Rdd --noconfirm chaotic-keyring chaotic-mirrorlist 2>/dev/null || true
+rm -f /etc/pacman.d/chaotic-mirrorlist
+rm -f /var/lib/pacman/sync/chaotic-aur.*
+
+echo "==> [3/4] Removing Chaotic-AUR GPG keys from pacman keyring..."
+pacman-key --delete FBA220DFC880C036 3056513887B78AEB 2>/dev/null || true
+
+echo "==> [4/4] Refreshing package databases..."
+pacman -Sy
+echo "==> Chaotic-AUR repository removed successfully!"
+"#;
+    app.queue_ext(
+        ExtCmd::new(
+            "mirrors-chaotic-aur-remove",
+            "sudo",
+            &args(&["bash", "-c", script]),
+        )
+        .note("Remove Chaotic-AUR repository")
+        .result(
+            "Chaotic-AUR repository removed!",
+            "Failed to remove Chaotic-AUR repository.",
+            "REPO: Chaotic-AUR repository removed",
+        ),
+    );
+}
+
+/// Remove CachyOS repositories, mirrorlists, keyrings, and pacman.conf configuration.
+pub fn remove_cachyos(app: &mut App) {
+    app.log("REPO: Removing CachyOS repositories");
+    let script = r#"set -e
+echo "==> [1/4] Preparing workspace..."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "==> [2/4] Downloading official CachyOS repository uninstaller..."
+if curl -sSL https://mirror.cachyos.org/cachyos-repo.tar.xz -o "$tmp/cachyos-repo.tar.xz"; then
+    tar -xf "$tmp/cachyos-repo.tar.xz" -C "$tmp"
+    echo "==> Running CachyOS uninstaller..."
+    (cd "$tmp/cachyos-repo" && ./cachyos-repo.sh --remove) || true
+fi
+
+echo "==> [3/4] Cleaning CachyOS configurations and packages..."
+if grep -q "cachyos" /etc/pacman.conf; then
+    cp -a /etc/pacman.conf /etc/pacman.conf.bak
+    sed -i '/^\s*\[cachyos.*\]/,/^\s*Include\s*=\s*\/etc\/pacman\.d\/cachyos.*mirrorlist/d' /etc/pacman.conf
+    sed -i '/cachyos/d' /etc/pacman.conf
+fi
+pacman -Rdd --noconfirm cachyos-keyring cachyos-mirrorlist cachyos-v3-mirrorlist cachyos-v4-mirrorlist 2>/dev/null || true
+rm -f /etc/pacman.d/cachyos-mirrorlist* /etc/pacman.d/cachyos-v*-mirrorlist*
+rm -f /var/lib/pacman/sync/cachyos*
+
+echo "==> [4/4] Refreshing package databases..."
+pacman -Sy
+echo "==> CachyOS repositories removed successfully!"
+"#;
+    app.queue_ext(
+        ExtCmd::new(
+            "mirrors-cachyos-remove",
+            "sudo",
+            &args(&["bash", "-c", script]),
+        )
+        .note("Remove CachyOS repositories")
+        .result(
+            "CachyOS repositories removed!",
+            "Failed to remove CachyOS repositories.",
+            "REPO: CachyOS repositories removed",
+        ),
+    );
+}
+
+/// Remove BlackArch penetration testing repository and pacman.conf configuration.
+pub fn remove_blackarch(app: &mut App) {
+    app.log("REPO: Removing BlackArch repository");
+    let script = r#"set -e
+echo "==> [1/3] Removing BlackArch entries from /etc/pacman.conf..."
+if grep -q "^\s*\[blackarch\]" /etc/pacman.conf; then
+    cp -a /etc/pacman.conf /etc/pacman.conf.bak
+    sed -i '/^\s*\[blackarch\]/,/^\s*Include\s*=\s*\/etc\/pacman\.d\/blackarch-mirrorlist/d' /etc/pacman.conf
+    sed -i '/^\s*\[blackarch\]/d' /etc/pacman.conf
+    echo "    Removed [blackarch] from /etc/pacman.conf"
+fi
+
+echo "==> [2/3] Removing BlackArch keyring and mirrorlist..."
+pacman -Rdd --noconfirm blackarch-keyring blackarch-mirrorlist 2>/dev/null || true
+rm -f /etc/pacman.d/blackarch-mirrorlist
+rm -f /var/lib/pacman/sync/blackarch.*
+
+echo "==> [3/3] Refreshing package databases..."
+pacman -Sy
+echo "==> BlackArch repository removed successfully!"
+"#;
+    app.queue_ext(
+        ExtCmd::new(
+            "mirrors-blackarch-remove",
+            "sudo",
+            &args(&["bash", "-c", script]),
+        )
+        .note("Remove BlackArch repository")
+        .result(
+            "BlackArch repository removed!",
+            "Failed to remove BlackArch repository.",
+            "REPO: BlackArch repository removed",
+        ),
+    );
+}
+
 impl Screen for MirrorsScreen {
     fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
         if self.menu.handle_key(&key) {
@@ -371,34 +486,16 @@ impl Screen for MirrorsScreen {
                     }
                 }
                 5 => {
-                    if app.settings().is_true("CONFIRM_ACTIONS") {
-                        app.confirm(
-                            "Enable Chaotic-AUR repository (automated pre-built AUR packages)?",
-                            false,
-                        );
-                        self.await_kind = Some(Await::EnableChaoticAur);
-                    } else {
-                        enable_chaotic_aur(app);
-                    }
+                    app.push(Box::new(super::repos::ReposScreen::new(
+                        app,
+                        super::repos::RepoMode::Add,
+                    )));
                 }
                 6 => {
-                    if app.settings().is_true("CONFIRM_ACTIONS") {
-                        app.confirm(
-                            "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?",
-                            false,
-                        );
-                        self.await_kind = Some(Await::EnableCachyos);
-                    } else {
-                        enable_cachyos(app);
-                    }
-                }
-                7 => {
-                    if app.settings().is_true("CONFIRM_ACTIONS") {
-                        app.confirm("Enable BlackArch penetration testing repository?", false);
-                        self.await_kind = Some(Await::EnableBlackArch);
-                    } else {
-                        enable_blackarch(app);
-                    }
+                    app.push(Box::new(super::repos::ReposScreen::new(
+                        app,
+                        super::repos::RepoMode::Remove,
+                    )));
                 }
                 _ => app.pop(),
             },
@@ -408,6 +505,9 @@ impl Screen for MirrorsScreen {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
+        self.chaotic_aur_enabled = sys::is_chaotic_aur_enabled();
+        self.cachyos_enabled = sys::is_cachyos_repo_enabled();
+        self.blackarch_enabled = sys::is_blackarch_enabled();
         let count = sys::mirror_count();
         let rows = Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).split(area);
         kv_table(
@@ -478,24 +578,6 @@ impl Screen for MirrorsScreen {
                     return;
                 }
                 self.execute_restore_backup(app);
-            }
-            Await::EnableChaoticAur => {
-                if !yes {
-                    return;
-                }
-                enable_chaotic_aur(app);
-            }
-            Await::EnableCachyos => {
-                if !yes {
-                    return;
-                }
-                enable_cachyos(app);
-            }
-            Await::EnableBlackArch => {
-                if !yes {
-                    return;
-                }
-                enable_blackarch(app);
             }
         }
     }
@@ -582,6 +664,15 @@ impl Screen for MirrorsScreen {
                     app.toast("Failed to enable Chaotic-AUR repository.", Sev::Error);
                 }
             }
+            "mirrors-chaotic-aur-remove" | "run-remove-chaotic-aur" => {
+                app.refresh_caps();
+                self.chaotic_aur_enabled = app.caps().chaotic_aur;
+                if ok {
+                    app.toast("Chaotic-AUR repository removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove Chaotic-AUR repository.", Sev::Error);
+                }
+            }
             "mirrors-cachyos" | "run-enable-cachyos-repo" => {
                 app.refresh_caps();
                 self.cachyos_enabled = app.caps().cachyos;
@@ -591,6 +682,15 @@ impl Screen for MirrorsScreen {
                     app.toast("Failed to enable CachyOS repositories.", Sev::Error);
                 }
             }
+            "mirrors-cachyos-remove" | "run-remove-cachyos-repo" => {
+                app.refresh_caps();
+                self.cachyos_enabled = app.caps().cachyos;
+                if ok {
+                    app.toast("CachyOS repositories removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove CachyOS repositories.", Sev::Error);
+                }
+            }
             "mirrors-blackarch" | "run-enable-blackarch" => {
                 app.refresh_caps();
                 self.blackarch_enabled = app.caps().blackarch;
@@ -598,6 +698,15 @@ impl Screen for MirrorsScreen {
                     app.toast("BlackArch repository enabled!", Sev::Success);
                 } else {
                     app.toast("Failed to enable BlackArch repository.", Sev::Error);
+                }
+            }
+            "mirrors-blackarch-remove" | "run-remove-blackarch" => {
+                app.refresh_caps();
+                self.blackarch_enabled = app.caps().blackarch;
+                if ok {
+                    app.toast("BlackArch repository removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove BlackArch repository.", Sev::Error);
                 }
             }
             _ => {}
@@ -611,16 +720,15 @@ mod tests {
 
     #[test]
     fn test_mirrors_menu_items() {
-        assert_eq!(MENU_ITEMS.len(), 9);
-        assert!(MENU_ITEMS[5].contains("Chaotic-AUR"));
-        assert!(MENU_ITEMS[6].contains("CachyOS"));
-        assert!(MENU_ITEMS[7].contains("BlackArch"));
+        assert_eq!(MENU_ITEMS.len(), 8);
+        assert!(MENU_ITEMS[5].contains("Add repositories"));
+        assert!(MENU_ITEMS[6].contains("Remove repositories"));
     }
 
     #[test]
     fn test_mirrors_screen_creation() {
         let app = App::new();
         let screen = MirrorsScreen::new(&app);
-        assert_eq!(screen.menu.items.len(), 9);
+        assert_eq!(screen.menu.items.len(), 8);
     }
 }

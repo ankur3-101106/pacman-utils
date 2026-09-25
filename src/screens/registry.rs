@@ -86,28 +86,16 @@ fn confirm_paccache(app: &App) -> Option<String> {
     ))
 }
 
-fn confirm_enable_chaotic_aur(app: &App) -> Option<String> {
-    app.settings()
-        .is_true("CONFIRM_ACTIONS")
-        .then(|| "Enable Chaotic-AUR repository (automated pre-built AUR packages)?".to_string())
-}
-
-fn confirm_enable_cachyos_repo(app: &App) -> Option<String> {
-    app.settings().is_true("CONFIRM_ACTIONS").then(|| {
-        "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?".to_string()
-    })
-}
-
 fn confirm_install_brew(app: &App) -> Option<String> {
     app.settings()
         .is_true("CONFIRM_ACTIONS")
         .then(|| "Install Homebrew (brew) package manager for Linux?".to_string())
 }
 
-fn confirm_enable_blackarch(app: &App) -> Option<String> {
+fn confirm_uninstall_brew(app: &App) -> Option<String> {
     app.settings()
         .is_true("CONFIRM_ACTIONS")
-        .then(|| "Enable BlackArch penetration testing repository?".to_string())
+        .then(|| "Uninstall Homebrew (brew) package manager from Linux?".to_string())
 }
 
 // ── Run builders ────────────────────────────────────────────────────
@@ -184,18 +172,6 @@ fn build_cache_scc(app: &mut App) {
     );
 }
 
-fn build_enable_chaotic_aur(app: &mut App) {
-    crate::screens::mirrors::enable_chaotic_aur(app);
-}
-
-fn build_enable_cachyos_repo(app: &mut App) {
-    crate::screens::mirrors::enable_cachyos(app);
-}
-
-fn build_enable_blackarch(app: &mut App) {
-    crate::screens::mirrors::enable_blackarch(app);
-}
-
 pub fn install_brew(app: &mut App) {
     app.log("EXTRAS: Installing Homebrew");
     let script = r#"set -e
@@ -250,6 +226,37 @@ echo "==> Homebrew installation finished successfully!"
 
 fn build_install_brew(app: &mut App) {
     install_brew(app);
+}
+
+pub fn uninstall_brew(app: &mut App) {
+    app.log("EXTRAS: Uninstalling Homebrew");
+    let script = r#"set -e
+echo "==> [1/3] Running official Homebrew uninstaller..."
+NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)" -- --force 2>/dev/null || true
+
+echo "==> [2/3] Cleaning up shell configuration and symlinks..."
+sed -i '/# Homebrew/d' "$HOME/.bashrc" "$HOME/.zshrc" 2>/dev/null || true
+sed -i '/brew shellenv/d' "$HOME/.bashrc" "$HOME/.zshrc" 2>/dev/null || true
+sudo rm -f /usr/local/bin/brew 2>/dev/null || true
+
+echo "==> [3/3] Removing Linuxbrew directories..."
+sudo rm -rf /home/linuxbrew/.linuxbrew "$HOME/.linuxbrew" 2>/dev/null || true
+
+echo "==> Homebrew uninstalled successfully!"
+"#;
+    app.queue_ext(
+        ExtCmd::new("run-uninstall-brew", "bash", &super::args(&["-c", script]))
+            .note("Uninstall Homebrew (brew)")
+            .result(
+                "Homebrew uninstalled successfully!",
+                "Homebrew uninstallation failed.",
+                "EXTRAS: Homebrew uninstalled",
+            ),
+    );
+}
+
+fn build_uninstall_brew(app: &mut App) {
+    uninstall_brew(app);
 }
 
 fn write_list(path: &std::path::Path, names: Vec<String>) -> Result<usize, String> {
@@ -374,6 +381,12 @@ mod open {
     }
     pub fn mirrors(app: &App) -> Box<dyn Screen> {
         Box::new(mirrors::MirrorsScreen::new(app))
+    }
+    pub fn add_repos(app: &App) -> Box<dyn Screen> {
+        Box::new(repos::ReposScreen::new(app, repos::RepoMode::Add))
+    }
+    pub fn remove_repos(app: &App) -> Box<dyn Screen> {
+        Box::new(repos::ReposScreen::new(app, repos::RepoMode::Remove))
     }
     pub fn sysinfo(app: &App) -> Box<dyn Screen> {
         info::InfoScreen::new_with_app(app)
@@ -636,50 +649,21 @@ pub static MAINTENANCE: [ActionDef; 4] = [
     ),
 ];
 
-pub static MIRRORS: [ActionDef; 4] = [
+pub static MIRRORS: [ActionDef; 3] = [
     action!(
         "Mirror Management",
         "Auto-update or rank mirrors with reflector, back up and restore the mirrorlist.",
         open::mirrors
     ),
     action!(
-        "Enable Chaotic-AUR Repo",
-        "Import Chaotic-AUR keys, install mirrorlist, and enable pre-built AUR binary repository.",
-        run = run_spec!(
-            "run-enable-chaotic-aur",
-            confirm_enable_chaotic_aur,
-            false,
-            build_enable_chaotic_aur,
-            "Chaotic-AUR repository enabled!",
-            "Failed to enable Chaotic-AUR repository.",
-            "REPO: Chaotic-AUR repository enabled"
-        )
+        "Add Repositories",
+        "Enable third-party repositories: Chaotic-AUR, CachyOS, and BlackArch.",
+        open::add_repos
     ),
     action!(
-        "Enable CachyOS Repos",
-        "Auto-detect CPU instruction set (v3/v4/zen4) and enable optimized CachyOS repositories.",
-        run = run_spec!(
-            "run-enable-cachyos-repo",
-            confirm_enable_cachyos_repo,
-            false,
-            build_enable_cachyos_repo,
-            "CachyOS repositories enabled!",
-            "Failed to enable CachyOS repositories.",
-            "REPO: CachyOS repositories enabled"
-        )
-    ),
-    action!(
-        "Enable BlackArch Repo",
-        "Import BlackArch GPG keys, configure repository via official strap.sh, and sync database.",
-        run = run_spec!(
-            "run-enable-blackarch",
-            confirm_enable_blackarch,
-            false,
-            build_enable_blackarch,
-            "BlackArch repository enabled!",
-            "Failed to enable BlackArch repository.",
-            "REPO: BlackArch repository enabled"
-        )
+        "Remove Repositories",
+        "Remove third-party repositories: Chaotic-AUR, CachyOS, and BlackArch.",
+        open::remove_repos
     ),
 ];
 
@@ -696,7 +680,7 @@ pub static INFORMATION: [ActionDef; 2] = [
     ),
 ];
 
-pub static EXTRAS: [ActionDef; 4] = [
+pub static EXTRAS: [ActionDef; 5] = [
     action!(
         "Favorite Packages",
         "Manage your favorite list and bulk-install it on fresh systems.",
@@ -723,6 +707,19 @@ pub static EXTRAS: [ActionDef; 4] = [
             "Homebrew installed successfully!",
             "Homebrew installation failed.",
             "EXTRAS: Homebrew installed"
+        )
+    ),
+    action!(
+        "Uninstall Homebrew (brew)",
+        "Uninstall Homebrew package manager and clean up shell configurations.",
+        run = run_spec!(
+            "run-uninstall-brew",
+            confirm_uninstall_brew,
+            false,
+            build_uninstall_brew,
+            "Homebrew uninstalled successfully!",
+            "Homebrew uninstallation failed.",
+            "EXTRAS: Homebrew uninstalled"
         )
     ),
 ];
@@ -770,17 +767,17 @@ mod tests {
 
     #[test]
     fn test_mirrors_actions_include_repos() {
-        assert_eq!(MIRRORS.len(), 4);
+        assert_eq!(MIRRORS.len(), 3);
         assert_eq!(MIRRORS[0].label, "Mirror Management");
-        assert_eq!(MIRRORS[1].label, "Enable Chaotic-AUR Repo");
-        assert_eq!(MIRRORS[2].label, "Enable CachyOS Repos");
-        assert_eq!(MIRRORS[3].label, "Enable BlackArch Repo");
+        assert_eq!(MIRRORS[1].label, "Add Repositories");
+        assert_eq!(MIRRORS[2].label, "Remove Repositories");
     }
 
     #[test]
     fn test_extras_actions_include_brew() {
-        assert_eq!(EXTRAS.len(), 4);
+        assert_eq!(EXTRAS.len(), 5);
         assert_eq!(EXTRAS[3].label, "Install Homebrew (brew)");
+        assert_eq!(EXTRAS[4].label, "Uninstall Homebrew (brew)");
     }
 
     #[test]

@@ -36,9 +36,9 @@
 | 🛡 | **Preflight & Preview** | Preflight checks (database lock, active PIDs, disk space, privileges, network) and non-destructive transaction previews before execution |
 | ⬆ | **System** | Update check (`checkupdates`), database refresh, full upgrades via pacman or your AUR helper |
 | 🧹 | **Maintenance** | Cache cleaning (`paccache -rkN`, `-Sc`, `-Scc`), safe `db.lck` removal |
-| 🌍 | **Mirrors & Repos** | reflector auto-update & ranking, mirrorlist backup/restore, Chaotic-AUR, CachyOS, and BlackArch repository setup |
+| 🌍 | **Mirrors & Repos** | reflector auto-update & ranking, mirrorlist backup/restore, Add & Remove third-party repositories (Chaotic-AUR, CachyOS, BlackArch) |
 | 📊 | **Information** | System dashboard, dependency check with one-key installs |
-| ⭐ | **Extras** | Favorite packages, 13 curated package groups (incl. BlackArch pentesting tools), list import, Homebrew (brew) installer |
+| ⭐ | **Extras** | Favorite packages, 13 curated package groups (incl. BlackArch pentesting tools), list import, Homebrew (brew) installer & uninstaller |
 | ⚙ | **Settings** | AUR helper (yay/paru), dry-run mode, independent confirmation controls, logging, cache retention |
 
 ## 🛡 Preflight Checks & Transaction Preview
