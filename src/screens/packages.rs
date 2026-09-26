@@ -263,7 +263,12 @@ impl InfoQueryScreen {
 }
 
 impl Screen for InfoQueryScreen {
-    fn handle_key(&mut self, _app: &mut App, _key: KeyEvent) {}
+    fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.pop(),
+            _ => {}
+        }
+    }
 
     fn poll(&mut self, app: &mut App) {
         if !self.asked && !app.modal_open() {

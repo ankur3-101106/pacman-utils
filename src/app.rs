@@ -199,6 +199,11 @@ impl App {
         self.screens.push(screen);
     }
 
+    #[allow(dead_code)]
+    pub fn screen_count(&self) -> usize {
+        self.screens.len()
+    }
+
     /// Close the top screen; quitting if it was the last one.
     pub fn pop(&mut self) {
         if self.dispatch_depth <= 1 {

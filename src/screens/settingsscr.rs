@@ -321,15 +321,14 @@ pub struct DepsCheckScreen {
 }
 
 impl DepsCheckScreen {
-    pub fn new(app: &App) -> Box<Self> {
-        let caps = app.caps().clone();
+    fn build_rows(caps: &crate::sys::Caps) -> (Vec<Vec<Span<'static>>>, Vec<String>) {
         let mut missing: Vec<String> = Vec::new();
-        let mut lines: Vec<Vec<Span>> = Vec::new();
+        let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
 
         let yay = sys::has_bin("yay");
         let paru = sys::has_bin("paru");
 
-        let push_row = |lines: &mut Vec<Vec<Span>>, name: &str, desc: &str, present: bool| {
+        let push_row = |lines: &mut Vec<Vec<Span<'static>>>, name: &str, desc: &str, present: bool| {
             let (icon, style) = if present {
                 ("✔", widgets::success())
             } else {
@@ -374,15 +373,41 @@ impl DepsCheckScreen {
             missing.push("pacman-contrib".into());
         }
 
+        lines.push(vec![]);
+        if missing.is_empty() {
+            lines.push(vec![widgets::span(
+                "✔ All recommended pacman dependencies are installed.".to_string(),
+                widgets::success(),
+            )]);
+        } else {
+            lines.push(vec![widgets::span(
+                format!("Missing pacman packages: {}", missing.join(", ")),
+                widgets::warning(),
+            )]);
+            lines.push(vec![widgets::span(
+                "Press Enter or 'i' to install missing dependencies.".to_string(),
+                widgets::dim(),
+            )]);
+        }
+
+        (lines, missing)
+    }
+
+    pub fn new(app: &App) -> Box<Self> {
+        let (lines, missing) = Self::build_rows(app.caps());
         Box::new(Self {
             lines,
             missing,
             await_install: false,
         })
     }
-}
 
-impl DepsCheckScreen {
+    fn refresh(&mut self, app: &App) {
+        let (lines, missing) = Self::build_rows(app.caps());
+        self.lines = lines;
+        self.missing = missing;
+    }
+
     fn install_deps(&self, app: &mut App) {
         if self.missing.is_empty() {
             return;
@@ -405,7 +430,26 @@ impl DepsCheckScreen {
 }
 
 impl Screen for DepsCheckScreen {
-    fn handle_key(&mut self, _app: &mut App, _key: KeyEvent) {}
+    fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.pop(),
+            KeyCode::Enter | KeyCode::Char('i') => {
+                if !self.missing.is_empty() {
+                    if app.settings().is_true("CONFIRM_ACTIONS") {
+                        app.confirm("Install missing dependencies?", false);
+                    } else {
+                        self.install_deps(app);
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                app.refresh_caps();
+                self.refresh(app);
+                app.toast("Dependencies refreshed.", Sev::Info);
+            }
+            _ => {}
+        }
+    }
 
     fn poll(&mut self, app: &mut App) {
         if !self.await_install && !self.missing.is_empty() && !app.modal_open() {
@@ -431,7 +475,11 @@ impl Screen for DepsCheckScreen {
     }
 
     fn help_hints(&self) -> Vec<&'static str> {
-        vec!["esc back"]
+        if self.missing.is_empty() {
+            vec!["r refresh", "esc back"]
+        } else {
+            vec!["enter/i install", "r refresh", "esc back"]
+        }
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
@@ -446,10 +494,53 @@ impl Screen for DepsCheckScreen {
             return;
         }
         app.refresh_caps();
+        self.refresh(app);
         if ok {
             app.toast("Dependencies installed.", Sev::Success);
         } else {
             app.toast("Dependency installation failed.", Sev::Error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deps_check_screen_creation() {
+        let app = App::new();
+        let screen = DepsCheckScreen::new(&app);
+        assert!(!screen.lines.is_empty());
+    }
+
+    #[test]
+    fn test_deps_check_screen_esc_and_q_pop() {
+        let mut app = App::new();
+        assert_eq!(app.screen_count(), 1);
+
+        let screen = DepsCheckScreen::new(&app);
+        app.push(screen);
+        assert_eq!(app.screen_count(), 2);
+
+        // Pressing Esc should pop the screen back to 1
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.screen_count(), 1);
+
+        // Pushing again and pressing 'q' should pop too
+        let screen2 = DepsCheckScreen::new(&app);
+        app.push(screen2);
+        assert_eq!(app.screen_count(), 2);
+
+        app.on_key(KeyEvent::from(KeyCode::Char('q')));
+        assert_eq!(app.screen_count(), 1);
+    }
+
+    #[test]
+    fn test_deps_check_screen_refresh() {
+        let app = App::new();
+        let mut screen = DepsCheckScreen::new(&app);
+        screen.refresh(&app);
+        assert!(!screen.lines.is_empty());
     }
 }
