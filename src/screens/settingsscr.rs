@@ -328,24 +328,25 @@ impl DepsCheckScreen {
         let yay = sys::has_bin("yay");
         let paru = sys::has_bin("paru");
 
-        let push_row = |lines: &mut Vec<Vec<Span<'static>>>, name: &str, desc: &str, present: bool| {
-            let (icon, style) = if present {
-                ("✔", widgets::success())
-            } else {
-                ("⚠", widgets::warning())
+        let push_row =
+            |lines: &mut Vec<Vec<Span<'static>>>, name: &str, desc: &str, present: bool| {
+                let (icon, style) = if present {
+                    ("✔", widgets::success())
+                } else {
+                    ("⚠", widgets::warning())
+                };
+                lines.push(vec![
+                    widgets::span(format!("{icon} "), style),
+                    widgets::span(name.to_string(), widgets::accent_bold()),
+                    widgets::span(format!(" — {desc}"), Style::new()),
+                ]);
+                if !present {
+                    lines.push(vec![widgets::span(
+                        "     not installed".to_string(),
+                        widgets::dim(),
+                    )]);
+                }
             };
-            lines.push(vec![
-                widgets::span(format!("{icon} "), style),
-                widgets::span(name.to_string(), widgets::accent_bold()),
-                widgets::span(format!(" — {desc}"), Style::new()),
-            ]);
-            if !present {
-                lines.push(vec![widgets::span(
-                    "     not installed".to_string(),
-                    widgets::dim(),
-                )]);
-            }
-        };
 
         push_row(&mut lines, "yay", "AUR helper", yay);
         push_row(&mut lines, "paru", "alternative AUR helper", paru);
