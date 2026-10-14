@@ -131,7 +131,7 @@ Commands never take over or corrupt your terminal. They run on a dedicated pseud
 - **Live Output Streaming:** Progress bars, downloads, and package builds render cleanly in real time
 - **Interactive Forwarding:** `sudo` password prompts and pacman `[Y/n]` confirmations work directly in-pane
 - **Color-Coded Status Borders:** Border highlights in **cyan** while running, **green** on success, and **red** on failure
-- **Clean Signal Handling:** `<kbd>Ctrl</kbd>+<kbd>c</kbd>` sends terminal interrupt; forced cancellation reaps child processes without PID recycling risks
+- **Clean Signal Handling:** <kbd>Ctrl</kbd>+<kbd>c</kbd> sends terminal interrupt; forced cancellation reaps child processes without PID recycling risks
 - **Scrollback History:** Navigate output logs smoothly with <kbd>PgUp</kbd> and <kbd>PgDn</kbd>
 - **Background Execution:** Launching commands from sub-screens returns you to the dashboard while jobs finish
 
