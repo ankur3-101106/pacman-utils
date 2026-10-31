@@ -255,7 +255,7 @@ fn timestamp() -> String {
 
 /// Format seconds-since-epoch as "%Y-%m-%d %H:%M:%S" (UTC-free local guess:
 /// uses the epoch offset directly, matching what `date` reports up to TZ).
-fn format_epoch(secs: u64) -> String {
+pub fn format_epoch(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (y, m, d) = civil_from_days(days);

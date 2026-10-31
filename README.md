@@ -13,20 +13,51 @@
   <a href="https://www.archlinux.org/"><img src="https://img.shields.io/badge/Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux&logoColor=white" alt="Arch Linux" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" /></a>
   <a href="https://github.com/ratatui/ratatui"><img src="https://img.shields.io/badge/Ratatui_TUI-3B007D?style=for-the-badge&logo=windowsterminal&logoColor=white" alt="Ratatui" /></a>
-  <a href="https://github.com/ankur3-101106/pacman-utils/releases"><img src="https://img.shields.io/badge/Version-2.2.1-1E89C8?style=for-the-badge" alt="version" /></a>
+  <a href="https://github.com/ankur3-101106/pacman-utils/releases"><img src="https://img.shields.io/badge/Version-2.3.0-1E89C8?style=for-the-badge" alt="version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL_2.0-5856D6?style=for-the-badge" alt="GPL-2.0" /></a>
 
   <br />
 
+  [**Installation**](#-installation) •
   [**Overview**](#-overview) •
   [**Features**](#-features) •
   [**Preflight & Preview**](#-preflight-checks--transaction-preview) •
   [**Keybindings**](#-keyboard-shortcuts) •
   [**Embedded Runner**](#-embedded-command-runner) •
-  [**Installation**](#-installation) •
   [**Configuration**](#-configuration)
 
 </div>
+
+---
+
+## 📦 Installation
+
+### Quick Install *(Recommended)*
+
+Install `archman` system-wide with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ankur3-101106/pacman-utils/main/install.sh | bash
+```
+
+> [!TIP]
+> This command downloads and executes `install.sh`, compiles the optimized release binary via `cargo`, and installs it to `/usr/local/bin/archman`.
+
+### Build from Source (Local Clone)
+
+```bash
+git clone https://github.com/ankur3-101106/pacman-utils.git
+cd pacman-utils
+./install.sh
+```
+
+### Direct Release Binary
+
+Pre-compiled standalone binaries are also available directly on the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page:
+
+```bash
+sudo curl -fsSL https://github.com/ankur3-101106/pacman-utils/releases/latest/download/archman -o /usr/local/bin/archman && sudo chmod +x /usr/local/bin/archman
+```
 
 ---
 
@@ -200,36 +231,6 @@ Commands never take over or corrupt your terminal. They run on a dedicated pseud
 
 ---
 
-## 📦 Installation
-
-### 1. Direct Binary Install via `curl` *(Recommended)*
-
-```bash
-sudo curl -fsSL https://github.com/ankur3-101106/pacman-utils/releases/latest/download/archman -o /usr/local/bin/archman && sudo chmod +x /usr/local/bin/archman
-```
-
-Or download into the current directory and move:
-
-```bash
-curl -fsSL https://github.com/ankur3-101106/pacman-utils/releases/latest/download/archman -o archman
-chmod +x archman
-sudo mv archman /usr/local/bin/
-```
-
-### 2. Via GitHub Releases
-
-Download the latest pre-compiled `archman` binary directly from the [Releases](https://github.com/ankur3-101106/pacman-utils/releases) page.
-
-### 3. Build from Source
-
-```bash
-git clone https://github.com/ankur3-101106/pacman-utils.git
-cd pacman-utils
-./install.sh          # builds release with cargo, then optionally installs to /usr/local/bin
-```
-
----
-
 ## 🔧 Dependencies
 
 | Dependency | Status | Purpose |
@@ -276,7 +277,7 @@ archman --help
 
 ```
 pacman-utils/
-├── Cargo.toml            # package manifest — archman v2.2.1
+├── Cargo.toml            # package manifest — archman v2.3.0
 ├── Cargo.lock            # locked dependency versions
 ├── install.sh            # builds (release), then asks to install to /usr/local/bin
 ├── img/

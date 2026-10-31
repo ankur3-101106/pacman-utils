@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added dedicated <kbd>E</kbd> (Enable repository) and <kbd>X</kbd> (Remove repository) shortcut entries for instant third-party distribution setup and teardown directly from the shortcuts pane.
   - Responsive layout dynamically adapting between 3 columns (wide terminals), 2 columns (standard terminals), and 1 column/compact fallback (small viewports).
   - Dynamic content-hugging panel height automatically calculated from the active mode's item count and column count, eliminating empty blank rows at the bottom of the shortcuts box.
+- **Human-Readable Mirror Backup Timestamps & Live-Time Backup Management (`src/mirrors/backup.rs` & `src/screens/mirrors.rs`)**:
+  - Converted all mirror backup timestamps from raw epoch values (e.g. `epoch-1730355678`) into formatted `YYYY-MM-DD HH:MM:SS` date/time strings.
+  - Added structured tabular column headers (`Backup File`, `Created / Modified`, `Mirrors`, `Size`) to the TUI backup history viewer.
+  - Formatted confirmation restore prompts with clean human-readable date and time.
+  - Deleting a backup (<kbd>d</kbd>/<kbd>x</kbd>/<kbd>Delete</kbd>) immediately deletes the archive file on disk and clears it from the backup list in live time without truncating the screen stack or popping back to the dashboard.
+  - Creating a backup (<kbd>b</kbd>) immediately inserts the new archive at the top of the backup list in live time.
 
 ### Fixed
 - **Process Interruption via Ctrl+C (`src/app.rs`)**:

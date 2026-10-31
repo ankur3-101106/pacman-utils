@@ -23,11 +23,11 @@ use ratatui::{
 
 use crate::app::{App, ExtCmd, Screen};
 use crate::mirrors::{
-    add_custom_provider, build_backup_command, build_restore_command, create_ranking_plan,
-    current_timestamp, discover_providers, list_backups, load_custom_providers,
-    remove_custom_provider, spawn_benchmark_job, validate_candidate_file, BackupEntry,
-    BenchmarkProgress, BenchmarkResult, CustomProvider, DetectionStatus, MirrorProvider,
-    ProviderId, RankingBackend, RankingPlan,
+    add_custom_provider, build_backup_command, build_delete_backup_command, build_restore_command,
+    create_backup, create_ranking_plan, current_timestamp, delete_backup, discover_providers,
+    list_backups, load_custom_providers, remove_custom_provider, spawn_benchmark_job,
+    validate_candidate_file, BackupEntry, BenchmarkProgress, BenchmarkResult, CustomProvider,
+    DetectionStatus, MirrorProvider, ProviderId, RankingBackend, RankingPlan,
 };
 #[allow(unused_imports)]
 pub use crate::sys::{MIRRORLIST, MIRRORLIST_BACKUP};
@@ -61,6 +61,7 @@ enum AwaitKind {
     InstallReflector,
     ApplyRanking,
     RestoreBackup(PathBuf, PathBuf),
+    DeleteBackup(PathBuf),
     StartBulkRank,
     DeleteCustomProvider(String),
     EnableRepo(ProviderId),
@@ -217,9 +218,14 @@ impl MirrorsScreen {
         if let Some(p) = self.selected_provider() {
             if let Some(target) = p.primary_mirrorlist() {
                 self.backups = list_backups(target);
-                self.selected_backup_idx = 0;
+                if self.backups.is_empty() {
+                    self.selected_backup_idx = 0;
+                } else if self.selected_backup_idx >= self.backups.len() {
+                    self.selected_backup_idx = self.backups.len() - 1;
+                }
             } else {
                 self.backups.clear();
+                self.selected_backup_idx = 0;
             }
         }
     }
@@ -431,6 +437,31 @@ impl MirrorsScreen {
         app.queue_ext(cmd);
     }
 
+    /// Create manual backup for the selected provider in live time if possible,
+    /// falling back to external command runner if elevated privileges are needed.
+    pub fn backup_selected_live(&mut self, app: &mut App) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+        let Some(target) = p.primary_mirrorlist() else {
+            app.toast("No mirrorlist file resolved for provider", Sev::Warn);
+            return;
+        };
+
+        match create_backup(target) {
+            Ok(entry) => {
+                let fname = entry.filename();
+                self.backups.insert(0, entry);
+                self.selected_backup_idx = 0;
+                app.toast(format!("Backup '{fname}' created."), Sev::Success);
+                app.log(&format!("MIRRORS: Created backup {fname} in live time"));
+            }
+            Err(_) => {
+                self.backup_selected(app);
+            }
+        }
+    }
+
     /// Open backup history restoration selector.
     pub fn open_restore_selector(&mut self, app: &mut App) {
         self.refresh_backups_for_selected();
@@ -505,9 +536,7 @@ impl MirrorsScreen {
 
         let prompt = match id {
             "chaotic-aur" => "Enable Chaotic-AUR repository (automated pre-built AUR packages)?",
-            "cachyos" => {
-                "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?"
-            }
+            "cachyos" => "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?",
             "blackarch" => "Enable BlackArch penetration testing repository?",
             _ => return,
         };
@@ -752,7 +781,15 @@ impl Screen for MirrorsScreen {
                             (self.selected_backup_idx + 1).min(self.backups.len() - 1);
                     }
                 }
-                KeyCode::Enter => {
+                KeyCode::Home | KeyCode::Char('g') => {
+                    self.selected_backup_idx = 0;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    if !self.backups.is_empty() {
+                        self.selected_backup_idx = self.backups.len() - 1;
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('r') => {
                     if let Some(backup) = self.backups.get(self.selected_backup_idx).cloned() {
                         let prompt = format!(
                             "Restore backup from {} ({}) to {}?",
@@ -767,19 +804,134 @@ impl Screen for MirrorsScreen {
                         ));
                     }
                 }
-                KeyCode::Char('p') => {
-                    // Preview backup content
+                KeyCode::Char('p') | KeyCode::Char('v') => {
+                    // Preview backup content with syntax highlighting
                     if let Some(backup) = self.backups.get(self.selected_backup_idx) {
                         if let Ok(content) = std::fs::read_to_string(&backup.backup_path) {
-                            let lines: Vec<Vec<Span>> = content
+                            let lines: Vec<Vec<Span<'static>>> = content
                                 .lines()
-                                .map(|l| vec![Span::styled(l.to_string(), Style::new())])
+                                .map(|l| {
+                                    let trimmed = l.trim();
+                                    let style = if trimmed.starts_with("Server =")
+                                        || trimmed.starts_with("Server=")
+                                    {
+                                        success()
+                                    } else if trimmed.starts_with('#') {
+                                        dim()
+                                    } else {
+                                        Style::new()
+                                    };
+                                    vec![Span::styled(l.to_string(), style)]
+                                })
                                 .collect();
                             app.push(ViewerScreen::new(
-                                format!("💾 Backup Preview: {}", backup.filename()),
+                                format!("💾 Backup: {} ({})", backup.filename(), backup.timestamp),
                                 lines,
                             ));
+                        } else {
+                            app.toast("Failed to read backup file.", Sev::Error);
                         }
+                    }
+                }
+                KeyCode::Char('c') => {
+                    // Compare / Diff selected backup against active mirrorlist
+                    if let Some(backup) = self.backups.get(self.selected_backup_idx) {
+                        let active_path = &backup.mirrorlist_path;
+                        let bkp_path = &backup.backup_path;
+
+                        let active_content =
+                            std::fs::read_to_string(active_path).unwrap_or_default();
+                        let bkp_content = std::fs::read_to_string(bkp_path).unwrap_or_default();
+
+                        let (active_mirrors, _) =
+                            crate::mirrors::parse_mirrorlist_content(&active_content);
+                        let (bkp_mirrors, _) =
+                            crate::mirrors::parse_mirrorlist_content(&bkp_content);
+
+                        let active_urls: std::collections::HashSet<String> =
+                            active_mirrors.iter().map(|m| m.url.clone()).collect();
+                        let bkp_urls: std::collections::HashSet<String> =
+                            bkp_mirrors.iter().map(|m| m.url.clone()).collect();
+
+                        let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
+                        lines.push(vec![
+                            span("Backup comparison: ", accent_bold()),
+                            span(backup.filename(), styled(cat_color(4))),
+                            span(format!(" ({})", backup.timestamp), dim()),
+                        ]);
+                        lines.push(vec![
+                            span("Active target:     ", accent_bold()),
+                            span(active_path.display().to_string(), dim()),
+                        ]);
+                        lines.push(vec![span(
+                            format!(
+                                "Summary:           {} in backup | {} in active target",
+                                bkp_mirrors.len(),
+                                active_mirrors.len()
+                            ),
+                            hint(),
+                        )]);
+                        lines.push(vec![span("────────────────────────────────────────────────────────────────────────────", dim())]);
+                        lines.push(vec![]);
+
+                        let mut diff_count = 0;
+
+                        // Mirrors only in current active file (added since backup)
+                        for url in &active_urls {
+                            if !bkp_urls.contains(url) {
+                                lines.push(vec![
+                                    span("+ [active only]  ", success()),
+                                    span(format!("Server = {url}"), success()),
+                                ]);
+                                diff_count += 1;
+                            }
+                        }
+
+                        // Mirrors only in backup (removed since backup)
+                        for url in &bkp_urls {
+                            if !active_urls.contains(url) {
+                                lines.push(vec![
+                                    span("- [backup only]  ", danger()),
+                                    span(format!("Server = {url}"), danger()),
+                                ]);
+                                diff_count += 1;
+                            }
+                        }
+
+                        // Common mirrors (unchanged)
+                        for url in &active_urls {
+                            if bkp_urls.contains(url) {
+                                lines.push(vec![
+                                    span("  [in both]      ", dim()),
+                                    span(format!("Server = {url}"), dim()),
+                                ]);
+                            }
+                        }
+
+                        if diff_count == 0 {
+                            lines.push(vec![
+                                span("✔ Identical: All mirrors in this backup match the current active mirrorlist exactly.", success()),
+                            ]);
+                        }
+
+                        app.push(ViewerScreen::new(
+                            format!("🔍 Diff: {} vs Current", backup.filename()),
+                            lines,
+                        ));
+                    }
+                }
+                KeyCode::Char('b') | KeyCode::Char('B') => {
+                    self.backup_selected_live(app);
+                }
+                KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete => {
+                    if let Some(backup) = self.backups.get(self.selected_backup_idx).cloned() {
+                        let prompt = format!(
+                            "Delete backup {} ({})?",
+                            backup.filename(),
+                            backup.timestamp
+                        );
+                        app.confirm(&prompt, false);
+                        self.await_kind = Some(AwaitKind::DeleteBackup(backup.backup_path));
                     }
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
@@ -1000,6 +1152,38 @@ impl Screen for MirrorsScreen {
                 let cmd = build_restore_command(&backup_path, &target_path);
                 app.queue_ext(cmd);
             }
+            AwaitKind::DeleteBackup(backup_path) => {
+                let filename = backup_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| backup_path.to_string_lossy().into_owned());
+
+                app.log(&format!(
+                    "MIRRORS: Deleting backup {}",
+                    backup_path.display()
+                ));
+
+                match delete_backup(&backup_path) {
+                    Ok(()) => {
+                        // Clear from list in live time
+                        self.backups.retain(|b| b.backup_path != backup_path);
+                        if self.backups.is_empty() {
+                            self.selected_backup_idx = 0;
+                        } else if self.selected_backup_idx >= self.backups.len() {
+                            self.selected_backup_idx = self.backups.len() - 1;
+                        }
+                        app.toast(format!("Backup '{filename}' deleted."), Sev::Success);
+                        app.log(&format!("MIRRORS: Backup {filename} deleted in live time"));
+                    }
+                    Err(e) => {
+                        app.log(&format!(
+                            "MIRRORS: Direct delete failed ({e}), queuing sudo command"
+                        ));
+                        let cmd = build_delete_backup_command(&backup_path);
+                        app.queue_ext(cmd);
+                    }
+                }
+            }
             AwaitKind::StartBulkRank => {
                 self.execute_bulk_rank(app);
             }
@@ -1192,6 +1376,15 @@ impl Screen for MirrorsScreen {
                     app.toast("Restore failed.", Sev::Error);
                 }
             }
+            "mirrors-delete-backup" => {
+                if ok {
+                    app.toast("Backup deleted.", Sev::Success);
+                    app.log("MIRRORS: Backup deleted");
+                    self.refresh_backups_for_selected();
+                } else {
+                    app.toast("Failed to delete backup.", Sev::Error);
+                }
+            }
             "mirrors-chaotic-aur" | "run-enable-chaotic-aur" => {
                 app.refresh_caps();
                 if ok {
@@ -1271,11 +1464,8 @@ impl MirrorsScreen {
         let (content_area, shortcuts_area) = if area.height >= 14 {
             let max_shortcuts = area.height.saturating_sub(7);
             let s_height = needed_height.min(max_shortcuts).max(3);
-            let chunks = Layout::vertical([
-                Constraint::Fill(1),
-                Constraint::Length(s_height),
-            ])
-            .split(area);
+            let chunks =
+                Layout::vertical([Constraint::Fill(1), Constraint::Length(s_height)]).split(area);
             (chunks[0], Some(chunks[1]))
         } else {
             (area, None)
@@ -1321,12 +1511,19 @@ impl MirrorsScreen {
         let status_desc = format!(
             " {} active mirrors · reflector: {} · rate-mirrors: {} ",
             total_active,
-            if self.reflector_installed { "installed" } else { "missing" },
-            if self.rate_mirrors_installed { "installed" } else { "missing" }
+            if self.reflector_installed {
+                "installed"
+            } else {
+                "missing"
+            },
+            if self.rate_mirrors_installed {
+                "installed"
+            } else {
+                "missing"
+            }
         );
         let block = panel_color("Repository Providers & Mirrorlists", cat_color(3)).title_bottom(
-            Line::from(span(status_desc, dim()))
-                .alignment(ratatui::layout::Alignment::Right),
+            Line::from(span(status_desc, dim())).alignment(ratatui::layout::Alignment::Right),
         );
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -1678,10 +1875,22 @@ impl MirrorsScreen {
 
         let mut lines = Vec::new();
         lines.push(Line::from(span(
-            "Select a timestamped backup to restore. The current mirrorlist will be safely backed up first:",
+            "Select a backup to view [v/p], diff [c], restore [enter], delete [d/x], or create new [b]:",
             hint(),
         )));
         lines.push(Line::from(""));
+
+        lines.push(Line::from(vec![
+            span("  ", Style::new()),
+            span(format!("{:<32}", "Backup File"), accent_bold()),
+            span(format!("{:<22}", "Created / Modified"), accent_bold()),
+            span(format!("{:<15}", "Mirrors"), accent_bold()),
+            span(format!("{:>10}", "Size"), accent_bold()),
+        ]));
+        lines.push(Line::from(span(
+            "  ────────────────────────────────────────────────────────────────────────────",
+            dim(),
+        )));
 
         for (i, b) in self.backups.iter().enumerate() {
             let is_sel = i == self.selected_backup_idx;
@@ -1694,22 +1903,19 @@ impl MirrorsScreen {
 
             lines.push(Line::from(vec![
                 span(cursor.to_string(), accent_bold()),
-                span(format!("{:<30}", b.filename()), style),
-                span(
-                    format!("{:<18}", format!("Timestamp: {}", b.timestamp)),
-                    dim(),
-                ),
+                span(format!("{:<32}", truncate_str(&b.filename(), 31)), style),
+                span(format!("{:<22}", b.timestamp), dim()),
                 span(
                     format!("{:<15}", format!("{} mirrors", b.mirror_count)),
                     success(),
                 ),
-                span(format!("{:>8} bytes", b.size_bytes), dim()),
+                span(format!("{:>10}", format!("{} B", b.size_bytes)), dim()),
             ]));
         }
 
         if self.backups.is_empty() {
             lines.push(Line::from(span(
-                "  No backups found for this mirrorlist.",
+                "  No backups found for this mirrorlist. Press [b] to create one now.",
                 dim(),
             )));
         }
@@ -1767,10 +1973,7 @@ impl MirrorsScreen {
                         format!("Remove {} repo", p.name),
                     )
                 } else {
-                    (
-                        "Enable repo".to_string(),
-                        "Remove repo".to_string(),
-                    )
+                    ("Enable repo".to_string(), "Remove repo".to_string())
                 };
 
                 vec![
@@ -1796,10 +1999,7 @@ impl MirrorsScreen {
                         format!("Remove {} repo", p.name),
                     )
                 } else {
-                    (
-                        "Enable repo".to_string(),
-                        "Remove repo".to_string(),
-                    )
+                    ("Enable repo".to_string(), "Remove repo".to_string())
                 };
 
                 vec![
@@ -1824,13 +2024,19 @@ impl MirrorsScreen {
             MirrorViewMode::Benchmark => vec![
                 ("[↑/k] [↓/j]", "Scroll benchmark results".to_string()),
                 ("[esc] [q]", "Stop benchmark job & return".to_string()),
-                ("Live Test", "Measuring latency & download throughput".to_string()),
+                (
+                    "Live Test",
+                    "Measuring latency & download throughput".to_string(),
+                ),
             ],
             MirrorViewMode::Restore => vec![
-                ("[↑/k] [↓/j]", "Select backup archive".to_string()),
-                ("[enter]", "Restore selected backup (atomic)".to_string()),
-                ("[p]", "Preview backup content in viewer".to_string()),
-                ("[esc] [q]", "Cancel & return to detail/list".to_string()),
+                ("[↑/k] [↓/j]", "Navigate backups".to_string()),
+                ("[enter/r]", "Restore backup (atomic)".to_string()),
+                ("[v/p]", "View backup content".to_string()),
+                ("[c]", "Diff with active mirrorlist".to_string()),
+                ("[b]", "Create new backup now".to_string()),
+                ("[d/x]", "Delete selected backup".to_string()),
+                ("[esc] [q]", "Return to provider list".to_string()),
             ],
             MirrorViewMode::Custom => vec![
                 ("[↑/k] [↓/j]", "Select custom provider".to_string()),
@@ -1861,10 +2067,7 @@ impl MirrorsScreen {
                 Constraint::Percentage(33),
                 Constraint::Percentage(33),
             ],
-            2 => vec![
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ],
+            2 => vec![Constraint::Percentage(50), Constraint::Percentage(50)],
             _ => vec![Constraint::Percentage(100)],
         };
 
@@ -2329,7 +2532,11 @@ mod tests {
         let mut screen = MirrorsScreen::new(&app);
 
         // Find blackarch or chaotic-aur index
-        if let Some(idx) = screen.providers.iter().position(|p| p.id.as_str() == "blackarch") {
+        if let Some(idx) = screen
+            .providers
+            .iter()
+            .position(|p| p.id.as_str() == "blackarch")
+        {
             screen.selected_idx = idx;
             let is_enabled = crate::sys::is_blackarch_enabled();
             if is_enabled {
@@ -2346,10 +2553,80 @@ mod tests {
         }
 
         // Test unsupported direct repo setup for arch
-        if let Some(idx) = screen.providers.iter().position(|p| p.id.as_str() == "arch") {
+        if let Some(idx) = screen
+            .providers
+            .iter()
+            .position(|p| p.id.as_str() == "arch")
+        {
             screen.selected_idx = idx;
             screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('e')));
             assert!(screen.await_kind.is_none());
         }
+    }
+
+    #[test]
+    fn test_mirrors_screen_backup_actions() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+
+        let temp_dir = std::env::temp_dir().join("archman_test_bkp_actions");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let target = temp_dir.join("mirrorlist");
+        let bkp = temp_dir.join("mirrorlist.bak.20261031_120000");
+
+        let _ = std::fs::write(&target, "Server = https://active.example.com\n");
+        let _ = std::fs::write(&bkp, "Server = https://backup.example.com\n");
+
+        screen.backups = vec![BackupEntry {
+            mirrorlist_path: target.clone(),
+            backup_path: bkp.clone(),
+            timestamp: "2026-10-31 12:00:00".to_string(),
+            mirror_count: 1,
+            size_bytes: 35,
+        }];
+        screen.mode = MirrorViewMode::Restore;
+        screen.selected_backup_idx = 0;
+
+        // Test view (v) pushes ViewerScreen
+        let initial_screens = app.screen_count();
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(app.screen_count(), initial_screens + 1);
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+
+        // Test diff (c) pushes ViewerScreen
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(app.screen_count(), initial_screens + 1);
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+
+        // Test restore (r) sets AwaitKind::RestoreBackup
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('r')));
+        assert!(matches!(
+            screen.await_kind,
+            Some(AwaitKind::RestoreBackup(_, _))
+        ));
+        screen.on_confirm(&mut app, false);
+        assert!(screen.await_kind.is_none());
+
+        // Test delete (d) sets AwaitKind::DeleteBackup and confirm deletes in live time
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('d')));
+        assert!(matches!(
+            screen.await_kind,
+            Some(AwaitKind::DeleteBackup(_))
+        ));
+        screen.on_confirm(&mut app, false);
+        assert!(screen.await_kind.is_none());
+        assert_eq!(screen.backups.len(), 1);
+
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('d')));
+        assert!(matches!(
+            screen.await_kind,
+            Some(AwaitKind::DeleteBackup(_))
+        ));
+        screen.on_confirm(&mut app, true);
+        assert!(screen.await_kind.is_none());
+        assert!(screen.backups.is_empty());
+        assert!(!bkp.exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
