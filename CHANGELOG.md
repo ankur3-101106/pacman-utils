@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Interactive bulk ranking workflow with provider multi-selection and independent error isolation.
   - User-registered custom provider management stored in `~/.config/archman/custom_mirrors.conf`.
 
+### Fixed
+- **Process Interruption via Ctrl+C (`src/app.rs`)**:
+  - Routed <kbd>Ctrl</kbd>+<kbd>C</kbd> while an external command is actively running directly to the embedded runner pane ([`RunPane::handle_key`](file:///home/ankur/github/pacman-utils/src/screens/runpane.rs#L268-L270)).
+  - Forwards `SIGINT` (`\x03`) to child processes (e.g. `pacman`, `yay`, `reflector`, `rate-mirrors`), allowing long-running operations to be safely interrupted without terminating `archman`.
+  - Preserved global <kbd>Ctrl</kbd>+<kbd>C</kbd> application exit when no command is running.
+
 ### Added
 - **Streamlined Repository Submenus (`Add Repositories` & `Remove Repositories`)**:
   - Replaced repetitive top-level repository actions in Tab 4 (`🌍 Mirrors & Repos`) and `MirrorsScreen` with structured submenus.
