@@ -53,6 +53,9 @@ pub struct HomeScreen {
     // Sidebar system summary
     sys_job: Option<Job<SysBrief>>,
     sys: Option<SysBrief>,
+
+    // Embedded mirror management
+    mirrors: crate::screens::mirrors::MirrorsScreen,
 }
 
 /// Rectangles for every dashboard region.
@@ -116,6 +119,7 @@ impl HomeScreen {
             labels,
             sys_job: Some(Job::spawn("system info", sys::sys_brief)),
             sys: None,
+            mirrors: crate::screens::mirrors::MirrorsScreen::new_embedded(),
         }
     }
 
@@ -234,6 +238,41 @@ impl Screen for HomeScreen {
             return;
         }
 
+        // ── Embedded Mirror Management delegation when Category 4 is active ──
+        if self.cat == 3 {
+            match key.code {
+                Char('?') => {
+                    app.toggle_help();
+                }
+                Char('/') => {
+                    self.search_active = true;
+                }
+                BackTab => self.switch_cat(-1),
+                Tab => self.switch_cat(1),
+                Char(c) if c.is_ascii_digit() => {
+                    let idx = c.to_digit(10).unwrap_or(0) as usize;
+                    if idx >= 1 && idx <= CATEGORIES.len() {
+                        self.cat = idx - 1;
+                        self.action = 0;
+                        self.clamp();
+                    }
+                }
+                Char('q') if self.mirrors.is_in_submode() => {
+                    self.mirrors.exit_submode();
+                }
+                Char('q') => {
+                    app.quit_app();
+                }
+                Esc if self.mirrors.is_in_submode() => {
+                    self.mirrors.exit_submode();
+                }
+                _ => {
+                    self.mirrors.handle_key(app, key);
+                }
+            }
+            return;
+        }
+
         let actions_len = CATEGORIES[self.cat].actions.len();
 
         match key.code {
@@ -277,13 +316,14 @@ impl Screen for HomeScreen {
         }
     }
 
-    fn poll(&mut self, _app: &mut App) {
+    fn poll(&mut self, app: &mut App) {
         if let Some(mut job) = self.sys_job.take() {
             match job.poll() {
                 Some(brief) => self.sys = Some(brief),
                 None => self.sys_job = Some(job),
             }
         }
+        self.mirrors.poll(app);
     }
 
     fn content_area(&self, full: Rect) -> Rect {
@@ -345,83 +385,88 @@ impl Screen for HomeScreen {
         // ── Search bar ──
         widgets::render_search_pane(f, r.search, &self.query, self.search_active);
 
-        // ── Actions pane (or search results) ──
-        self.clamp();
+        // ── Actions pane (or embedded Mirror Management / search results) ──
         let searching = !self.query.is_empty();
-        let act_rows = r.actions.height.saturating_sub(2) as usize;
 
-        let desc: &str;
-        let mut act_lines: Vec<Line> = Vec::new();
-
-        if searching {
-            desc = self
-                .matches
-                .get(self.search_sel)
-                .map(|&i| self.index[i].desc)
-                .unwrap_or("No matching actions.");
-            // Render window with its own offset (reuse act_offset).
-            let start = self.act_offset.min(self.matches.len());
-            for &mi in self.matches.iter().skip(start).take(act_rows) {
-                let e = &self.index[mi];
-                let sel = mi
-                    == self
-                        .matches
-                        .get(self.search_sel)
-                        .copied()
-                        .unwrap_or(usize::MAX);
-                let style = if sel {
-                    widgets::selected_style(widgets::cat_color(e.cat))
-                } else {
-                    Style::new()
-                };
-                let cursor = if sel { "▸ " } else { "  " };
-                act_lines.push(Line::from(vec![
-                    widgets::span(cursor.to_string(), widgets::cat_style(e.cat)),
-                    Span::styled(e.label.clone(), style),
-                    widgets::span(format!("  {}", CATEGORIES[e.cat].title), widgets::dim()),
-                ]));
-            }
+        if !searching && self.cat == 3 {
+            self.mirrors.draw_embedded(f, r.actions);
         } else {
-            let acts = CATEGORIES[self.cat].actions;
-            desc = acts
-                .get(self.action)
-                .map(|a| a.desc)
-                .unwrap_or("No actions in this category.");
-            for (i, a) in acts.iter().enumerate().skip(self.act_offset) {
-                if act_lines.len() >= act_rows {
-                    break;
+            self.clamp();
+            let act_rows = r.actions.height.saturating_sub(2) as usize;
+
+            let desc: &str;
+            let mut act_lines: Vec<Line> = Vec::new();
+
+            if searching {
+                desc = self
+                    .matches
+                    .get(self.search_sel)
+                    .map(|&i| self.index[i].desc)
+                    .unwrap_or("No matching actions.");
+                // Render window with its own offset (reuse act_offset).
+                let start = self.act_offset.min(self.matches.len());
+                for &mi in self.matches.iter().skip(start).take(act_rows) {
+                    let e = &self.index[mi];
+                    let sel = mi
+                        == self
+                            .matches
+                            .get(self.search_sel)
+                            .copied()
+                            .unwrap_or(usize::MAX);
+                    let style = if sel {
+                        widgets::selected_style(widgets::cat_color(e.cat))
+                    } else {
+                        Style::new()
+                    };
+                    let cursor = if sel { "▸ " } else { "  " };
+                    act_lines.push(Line::from(vec![
+                        widgets::span(cursor.to_string(), widgets::cat_style(e.cat)),
+                        Span::styled(e.label.clone(), style),
+                        widgets::span(format!("  {}", CATEGORIES[e.cat].title), widgets::dim()),
+                    ]));
                 }
-                let sel = i == self.action;
-                let style = if sel {
-                    widgets::selected_style(widgets::cat_color(self.cat))
-                } else {
-                    Style::new()
-                };
-                let cursor = if sel { "▸ " } else { "  " };
-                act_lines.push(Line::from(vec![
-                    widgets::span(
-                        cursor.to_string(),
-                        widgets::selected_style(widgets::cat_color(self.cat)),
-                    ),
-                    Span::styled(a.label.to_string(), style),
-                ]));
+            } else {
+                let acts = CATEGORIES[self.cat].actions;
+                desc = acts
+                    .get(self.action)
+                    .map(|a| a.desc)
+                    .unwrap_or("No actions in this category.");
+                for (i, a) in acts.iter().enumerate().skip(self.act_offset) {
+                    if act_lines.len() >= act_rows {
+                        break;
+                    }
+                    let sel = i == self.action;
+                    let style = if sel {
+                        widgets::selected_style(widgets::cat_color(self.cat))
+                    } else {
+                        Style::new()
+                    };
+                    let cursor = if sel { "▸ " } else { "  " };
+                    act_lines.push(Line::from(vec![
+                        widgets::span(
+                            cursor.to_string(),
+                            widgets::selected_style(widgets::cat_color(self.cat)),
+                        ),
+                        Span::styled(a.label.to_string(), style),
+                    ]));
+                }
             }
+
+            // Actions pane with the description on its bottom border.
+            let title = if searching {
+                format!("Search: {} ({} matches)", self.query, self.matches.len())
+            } else {
+                CATEGORIES[self.cat].title.to_string()
+            };
+            let desc_style = widgets::dim();
+            let block = widgets::panel_color(&title, widgets::cat_color(self.cat)).title_bottom(
+                Line::from(widgets::span(format!(" {} ", desc), desc_style))
+                    .alignment(ratatui::layout::Alignment::Right),
+            );
+            f.render_widget(Paragraph::new(act_lines).block(block), r.actions);
         }
 
-        // Actions pane with the description on its bottom border.
-        let title = if searching {
-            format!("Search: {} ({} matches)", self.query, self.matches.len())
-        } else {
-            CATEGORIES[self.cat].title.to_string()
-        };
-        let desc_style = widgets::dim();
-        let block = widgets::panel_color(&title, widgets::cat_color(self.cat)).title_bottom(
-            Line::from(widgets::span(format!(" {} ", desc), desc_style))
-                .alignment(ratatui::layout::Alignment::Right),
-        );
-        f.render_widget(Paragraph::new(act_lines).block(block), r.actions);
-
-        // ── Command list footer ──
+        // ── Command list footer (TUI shortcut pane, always visible) ──
         widgets::render_command_list(f, r.cmdlist);
     }
 
@@ -430,15 +475,16 @@ impl Screen for HomeScreen {
     }
 
     fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(spec) = self.pending_run.take() else {
-            return;
-        };
-        if !yes {
-            app.toast("Cancelled.", widgets::Sev::Info);
-            app.log(&format!("{} cancelled", spec.tag));
+        if let Some(spec) = self.pending_run.take() {
+            if !yes {
+                app.toast("Cancelled.", widgets::Sev::Info);
+                app.log(&format!("{} cancelled", spec.tag));
+                return;
+            }
+            self.run_spec(app, spec);
             return;
         }
-        self.run_spec(app, spec);
+        self.mirrors.on_confirm(app, yes);
     }
 
     fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
@@ -455,6 +501,11 @@ impl Screen for HomeScreen {
             }
             self.last_run = Some(spec);
         }
+        self.mirrors.on_ext_done(app, tag, ok);
+    }
+
+    fn on_input(&mut self, app: &mut App, value: String) {
+        self.mirrors.on_input(app, value);
     }
 }
 
@@ -471,5 +522,64 @@ impl HomeScreen {
         } else if self.action_view > 0 && self.search_sel >= self.act_offset + self.action_view {
             self.act_offset = self.search_sel + 1 - self.action_view;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn text_of(t: &ratatui::Terminal<TestBackend>) -> String {
+        let buf = t.backend().buffer();
+        let mut s = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    #[test]
+    fn test_home_screen_embedded_mirrors_view() {
+        let mut app = App::new();
+        let mut home = HomeScreen::new();
+        let mut term = ratatui::Terminal::new(TestBackend::new(120, 30)).unwrap();
+
+        // Switch to category 4 (Mirror Management, 0-indexed idx = 3)
+        home.handle_key(&mut app, KeyEvent::from(KeyCode::Char('4')));
+        assert_eq!(home.cat, 3);
+
+        // Draw and check that Mirror Management is directly embedded
+        term.draw(|f| home.draw(f, f.area())).unwrap();
+        let text = text_of(&term);
+
+        // Content table
+        assert!(text.contains("Repository Providers & Mirrorlists"));
+        assert!(text.contains("Arch Linux"));
+
+        // Tab shortcuts pane
+        assert!(text.contains("Shortcuts"));
+        assert!(text.contains("[R]"));
+        assert!(text.contains("[b]"));
+
+        // Global TUI shortcuts pane (Command list)
+        assert!(text.contains("Command list"));
+        assert!(text.contains("[q] [ctrl+c]"));
+        assert!(text.contains("[tab]"));
+
+        // Test navigation inside embedded mirrors
+        home.handle_key(&mut app, KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(home.mirrors.selected_index(), 1);
+
+        // Test switching back to category 1
+        home.handle_key(&mut app, KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(home.cat, 0);
+
+        term.draw(|f| home.draw(f, f.area())).unwrap();
+        let text_cat1 = text_of(&term);
+        assert!(text_cat1.contains("Install Package"));
     }
 }

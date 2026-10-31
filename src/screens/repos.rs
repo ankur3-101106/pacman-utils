@@ -31,8 +31,30 @@ const REMOVE_MENU_ITEMS: [&str; 4] = [
     "🔙 Back",
 ];
 
+fn manage_menu_items(chaotic: bool, cachyos: bool, blackarch: bool) -> Vec<String> {
+    vec![
+        if chaotic {
+            "🌀 Remove Chaotic-AUR repository (currently enabled)".to_string()
+        } else {
+            "🌀 Enable Chaotic-AUR (Automated pre-built AUR binary repository)".to_string()
+        },
+        if cachyos {
+            "⚡ Remove CachyOS repositories (currently enabled)".to_string()
+        } else {
+            "⚡ Enable CachyOS (CPU-optimized x86-64-v3/v4/zen4 packages)".to_string()
+        },
+        if blackarch {
+            "🏴 Remove BlackArch repository (currently enabled)".to_string()
+        } else {
+            "🏴 Enable BlackArch (Penetration testing & security repository)".to_string()
+        },
+        "🔙 Back".to_string(),
+    ]
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RepoMode {
+    Manage,
     Add,
     Remove,
 }
@@ -56,10 +78,12 @@ impl ReposScreen {
     pub fn new(app: &App, mode: RepoMode) -> Self {
         let caps = app.caps();
         let title = match mode {
+            RepoMode::Manage => "Third-Party Repository Management",
             RepoMode::Add => "Add Third-Party Repositories",
             RepoMode::Remove => "Remove Third-Party Repositories",
         };
         let items = match mode {
+            RepoMode::Manage => manage_menu_items(caps.chaotic_aur, caps.cachyos, caps.blackarch),
             RepoMode::Add => ADD_MENU_ITEMS.map(str::to_string).to_vec(),
             RepoMode::Remove => REMOVE_MENU_ITEMS.map(str::to_string).to_vec(),
         };
@@ -82,6 +106,27 @@ impl Screen for ReposScreen {
         match key.code {
             KeyCode::Enter => match self.menu.selected {
                 0 => match self.mode {
+                    RepoMode::Manage => {
+                        if self.chaotic_aur_enabled {
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm(
+                                    "Remove Chaotic-AUR repository, mirrorlist, and keyrings?",
+                                    false,
+                                );
+                                self.await_kind = Some(RepoAwait::ChaoticAur);
+                            } else {
+                                remove_chaotic_aur(app);
+                            }
+                        } else if app.settings().is_true("CONFIRM_ACTIONS") {
+                            app.confirm(
+                                "Enable Chaotic-AUR repository (automated pre-built AUR packages)?",
+                                false,
+                            );
+                            self.await_kind = Some(RepoAwait::ChaoticAur);
+                        } else {
+                            enable_chaotic_aur(app);
+                        }
+                    }
                     RepoMode::Add => {
                         if self.chaotic_aur_enabled {
                             app.toast(
@@ -115,6 +160,27 @@ impl Screen for ReposScreen {
                     }
                 },
                 1 => match self.mode {
+                    RepoMode::Manage => {
+                        if self.cachyos_enabled {
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm(
+                                    "Remove CachyOS repositories, mirrorlist, and keyrings?",
+                                    false,
+                                );
+                                self.await_kind = Some(RepoAwait::Cachyos);
+                            } else {
+                                remove_cachyos(app);
+                            }
+                        } else if app.settings().is_true("CONFIRM_ACTIONS") {
+                            app.confirm(
+                                "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?",
+                                false,
+                            );
+                            self.await_kind = Some(RepoAwait::Cachyos);
+                        } else {
+                            enable_cachyos(app);
+                        }
+                    }
                     RepoMode::Add => {
                         if self.cachyos_enabled {
                             app.toast(
@@ -148,6 +214,24 @@ impl Screen for ReposScreen {
                     }
                 },
                 2 => match self.mode {
+                    RepoMode::Manage => {
+                        if self.blackarch_enabled {
+                            if app.settings().is_true("CONFIRM_ACTIONS") {
+                                app.confirm(
+                                    "Remove BlackArch repository, mirrorlist, and keyrings?",
+                                    false,
+                                );
+                                self.await_kind = Some(RepoAwait::BlackArch);
+                            } else {
+                                remove_blackarch(app);
+                            }
+                        } else if app.settings().is_true("CONFIRM_ACTIONS") {
+                            app.confirm("Enable BlackArch penetration testing repository?", false);
+                            self.await_kind = Some(RepoAwait::BlackArch);
+                        } else {
+                            enable_blackarch(app);
+                        }
+                    }
                     RepoMode::Add => {
                         if self.blackarch_enabled {
                             app.toast(
@@ -189,8 +273,20 @@ impl Screen for ReposScreen {
         self.cachyos_enabled = sys::is_cachyos_repo_enabled();
         self.blackarch_enabled = sys::is_blackarch_enabled();
 
+        if self.mode == RepoMode::Manage {
+            let updated = manage_menu_items(
+                self.chaotic_aur_enabled,
+                self.cachyos_enabled,
+                self.blackarch_enabled,
+            );
+            if self.menu.items != updated {
+                self.menu.items = updated;
+            }
+        }
+
         let rows = Layout::vertical([Constraint::Length(8), Constraint::Fill(1)]).split(area);
         let title = match self.mode {
+            RepoMode::Manage => "📦  Third-Party Repository Management",
             RepoMode::Add => "➕  Add Third-Party Repositories",
             RepoMode::Remove => "➖  Remove Third-Party Repositories",
         };
@@ -244,6 +340,27 @@ impl Screen for ReposScreen {
             return;
         }
         match (self.mode, await_kind) {
+            (RepoMode::Manage, RepoAwait::ChaoticAur) => {
+                if self.chaotic_aur_enabled {
+                    remove_chaotic_aur(app);
+                } else {
+                    enable_chaotic_aur(app);
+                }
+            }
+            (RepoMode::Manage, RepoAwait::Cachyos) => {
+                if self.cachyos_enabled {
+                    remove_cachyos(app);
+                } else {
+                    enable_cachyos(app);
+                }
+            }
+            (RepoMode::Manage, RepoAwait::BlackArch) => {
+                if self.blackarch_enabled {
+                    remove_blackarch(app);
+                } else {
+                    enable_blackarch(app);
+                }
+            }
             (RepoMode::Add, RepoAwait::ChaoticAur) => enable_chaotic_aur(app),
             (RepoMode::Add, RepoAwait::Cachyos) => enable_cachyos(app),
             (RepoMode::Add, RepoAwait::BlackArch) => enable_blackarch(app),
@@ -311,6 +428,14 @@ impl Screen for ReposScreen {
             }
             _ => {}
         }
+
+        if self.mode == RepoMode::Manage {
+            self.menu.items = manage_menu_items(
+                self.chaotic_aur_enabled,
+                self.cachyos_enabled,
+                self.blackarch_enabled,
+            );
+        }
     }
 }
 
@@ -321,9 +446,24 @@ mod tests {
     #[test]
     fn test_repos_screen_creation() {
         let app = App::new();
+        let manage_screen = ReposScreen::new(&app, RepoMode::Manage);
+        assert_eq!(manage_screen.menu.items.len(), 4);
         let add_screen = ReposScreen::new(&app, RepoMode::Add);
         assert_eq!(add_screen.menu.items.len(), 4);
         let remove_screen = ReposScreen::new(&app, RepoMode::Remove);
         assert_eq!(remove_screen.menu.items.len(), 4);
+    }
+
+    #[test]
+    fn test_repos_manage_menu_items_dynamic_status() {
+        let disabled_items = manage_menu_items(false, false, false);
+        assert!(disabled_items[0].contains("Enable Chaotic-AUR"));
+        assert!(disabled_items[1].contains("Enable CachyOS"));
+        assert!(disabled_items[2].contains("Enable BlackArch"));
+
+        let enabled_items = manage_menu_items(true, true, true);
+        assert!(enabled_items[0].contains("Remove Chaotic-AUR"));
+        assert!(enabled_items[1].contains("Remove CachyOS"));
+        assert!(enabled_items[2].contains("Remove BlackArch"));
     }
 }

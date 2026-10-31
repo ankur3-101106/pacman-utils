@@ -33,7 +33,7 @@ use crate::mirrors::{
 pub use crate::sys::{MIRRORLIST, MIRRORLIST_BACKUP};
 use crate::widgets::{
     self, accent, accent_bold, cat_color, danger, dim, hint, kv_table, panel, panel_color,
-    selected_style, span, success, warning, Sev,
+    selected_style, span, styled, success, warning, Sev,
 };
 
 use super::{args, viewer::ViewerScreen};
@@ -63,6 +63,8 @@ enum AwaitKind {
     RestoreBackup(PathBuf, PathBuf),
     StartBulkRank,
     DeleteCustomProvider(String),
+    EnableRepo(ProviderId),
+    RemoveRepo(ProviderId),
 }
 
 /// Input prompt stage when registering a custom provider.
@@ -94,6 +96,7 @@ pub struct MirrorsScreen {
     bench_cancel: Option<Arc<AtomicBool>>,
     bench_progress_msg: String,
     bench_finished: bool,
+    bench_scroll: usize,
 
     // Backup & Restore state
     backups: Vec<BackupEntry>,
@@ -121,7 +124,15 @@ pub struct MirrorsScreen {
 
 impl MirrorsScreen {
     pub fn new(app: &App) -> Self {
-        let caps = app.caps();
+        let mut s = Self::new_embedded();
+        s.reflector_installed = app.caps().reflector;
+        s
+    }
+
+    /// Construct screen initialized with system-detected binaries (usable standalone or embedded).
+    pub fn new_embedded() -> Self {
+        let reflector_installed = crate::sys::has_bin("reflector");
+        let rate_mirrors_installed = crate::sys::has_bin("rate-mirrors");
         let providers = discover_providers();
         let bulk_selected = vec![true; providers.len()];
         let custom_providers = load_custom_providers();
@@ -143,6 +154,7 @@ impl MirrorsScreen {
             bench_cancel: None,
             bench_progress_msg: String::new(),
             bench_finished: false,
+            bench_scroll: 0,
 
             backups: Vec::new(),
             selected_backup_idx: 0,
@@ -158,8 +170,8 @@ impl MirrorsScreen {
             pending_plan: None,
             await_kind: None,
 
-            reflector_installed: caps.reflector,
-            rate_mirrors_installed: crate::sys::has_bin("rate-mirrors"),
+            reflector_installed,
+            rate_mirrors_installed,
         }
     }
 
@@ -175,6 +187,11 @@ impl MirrorsScreen {
         self.custom_providers = load_custom_providers();
         self.reflector_installed = crate::sys::has_bin("reflector");
         self.rate_mirrors_installed = crate::sys::has_bin("rate-mirrors");
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_index(&self) -> usize {
+        self.selected_idx
     }
 
     pub fn selected_provider(&self) -> Option<&MirrorProvider> {
@@ -346,6 +363,7 @@ impl MirrorsScreen {
         self.bench_cancel = Some(cancel);
         self.bench_results.clear();
         self.bench_finished = false;
+        self.bench_scroll = 0;
         self.bench_progress_msg = "Initializing mirror benchmark...".to_string();
         self.mode = MirrorViewMode::Benchmark;
     }
@@ -387,6 +405,7 @@ impl MirrorsScreen {
         self.bench_cancel = Some(cancel);
         self.bench_results.clear();
         self.bench_finished = false;
+        self.bench_scroll = 0;
         self.bench_progress_msg = "Benchmarking all detected providers...".to_string();
         self.mode = MirrorViewMode::Benchmark;
     }
@@ -457,6 +476,100 @@ impl MirrorsScreen {
             self.execute_ranking_for_provider(app, &provider, None);
         }
     }
+
+    /// Enable third-party repository if supported for the selected provider.
+    pub fn enable_selected_repo(&mut self, app: &mut App) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+        let id = p.id.as_str();
+        if !matches!(id, "chaotic-aur" | "cachyos" | "blackarch") {
+            app.toast(
+                format!("Direct repository setup not supported for '{}'", p.name),
+                Sev::Warn,
+            );
+            return;
+        }
+
+        let is_enabled = match id {
+            "chaotic-aur" => crate::sys::is_chaotic_aur_enabled(),
+            "cachyos" => crate::sys::is_cachyos_repo_enabled(),
+            "blackarch" => crate::sys::is_blackarch_enabled(),
+            _ => false,
+        };
+
+        if is_enabled {
+            app.toast(format!("{} is already enabled.", p.name), Sev::Info);
+            return;
+        }
+
+        let prompt = match id {
+            "chaotic-aur" => "Enable Chaotic-AUR repository (automated pre-built AUR packages)?",
+            "cachyos" => {
+                "Enable CachyOS repositories (CPU-optimized x86-64-v3/v4/zen4 packages)?"
+            }
+            "blackarch" => "Enable BlackArch penetration testing repository?",
+            _ => return,
+        };
+
+        if app.settings().is_true("CONFIRM_ACTIONS") {
+            app.confirm(prompt, false);
+            self.await_kind = Some(AwaitKind::EnableRepo(p.id.clone()));
+        } else {
+            match id {
+                "chaotic-aur" => enable_chaotic_aur(app),
+                "cachyos" => enable_cachyos(app),
+                "blackarch" => enable_blackarch(app),
+                _ => {}
+            }
+        }
+    }
+
+    /// Remove third-party repository if supported for the selected provider.
+    pub fn remove_selected_repo(&mut self, app: &mut App) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+        let id = p.id.as_str();
+        if !matches!(id, "chaotic-aur" | "cachyos" | "blackarch") {
+            app.toast(
+                format!("Direct repository removal not supported for '{}'", p.name),
+                Sev::Warn,
+            );
+            return;
+        }
+
+        let is_enabled = match id {
+            "chaotic-aur" => crate::sys::is_chaotic_aur_enabled(),
+            "cachyos" => crate::sys::is_cachyos_repo_enabled(),
+            "blackarch" => crate::sys::is_blackarch_enabled(),
+            _ => false,
+        };
+
+        if !is_enabled {
+            app.toast(format!("{} is not currently enabled.", p.name), Sev::Warn);
+            return;
+        }
+
+        let prompt = match id {
+            "chaotic-aur" => "Remove Chaotic-AUR repository, mirrorlist, and keyrings?",
+            "cachyos" => "Remove CachyOS repositories, mirrorlist, and keyrings?",
+            "blackarch" => "Remove BlackArch repository, mirrorlist, and keyrings?",
+            _ => return,
+        };
+
+        if app.settings().is_true("CONFIRM_ACTIONS") {
+            app.confirm(prompt, false);
+            self.await_kind = Some(AwaitKind::RemoveRepo(p.id.clone()));
+        } else {
+            match id {
+                "chaotic-aur" => remove_chaotic_aur(app),
+                "cachyos" => remove_cachyos(app),
+                "blackarch" => remove_blackarch(app),
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Screen for MirrorsScreen {
@@ -505,6 +618,12 @@ impl Screen for MirrorsScreen {
                     self.refresh_providers();
                     app.toast("Refreshed mirror providers and configuration", Sev::Info);
                 }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.enable_selected_repo(app);
+                }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    self.remove_selected_repo(app);
+                }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     app.pop();
                 }
@@ -536,7 +655,7 @@ impl Screen for MirrorsScreen {
                 KeyCode::Char('U') => {
                     self.open_restore_selector(app);
                 }
-                KeyCode::Char('v') => {
+                KeyCode::Enter | KeyCode::Char('v') => {
                     // View raw mirrorlist contents in viewer screen
                     if let Some(p) = self.selected_provider() {
                         if let Some(target) = p.primary_mirrorlist() {
@@ -552,6 +671,12 @@ impl Screen for MirrorsScreen {
                             }
                         }
                     }
+                }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.enable_selected_repo(app);
+                }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    self.remove_selected_repo(app);
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.mode = MirrorViewMode::List;
@@ -598,6 +723,15 @@ impl Screen for MirrorsScreen {
             },
 
             MirrorViewMode::Benchmark => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.bench_scroll = self.bench_scroll.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.bench_results.is_empty() {
+                        self.bench_scroll =
+                            (self.bench_scroll + 1).min(self.bench_results.len().saturating_sub(1));
+                    }
+                }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     if let Some(ref cancel) = self.bench_cancel {
                         cancel.store(true, Ordering::SeqCst);
@@ -724,10 +858,29 @@ impl Screen for MirrorsScreen {
             .filter(|p| p.detection.is_detected())
             .count();
 
+        let shortcuts_items = self.shortcuts_for_mode();
+        let inner_width = area.width.saturating_sub(2);
+        let num_cols = if inner_width >= 105 {
+            3
+        } else if inner_width >= 60 {
+            2
+        } else {
+            1
+        };
+        let needed_rows = shortcuts_items.len().div_ceil(num_cols);
+        let needed_height = (needed_rows + 2) as u16;
+
+        let shortcuts_height = if area.height < 14 {
+            1
+        } else {
+            let max_shortcuts = area.height.saturating_sub(10);
+            needed_height.min(max_shortcuts).max(3)
+        };
+
         let chunks = Layout::vertical([
-            Constraint::Length(6), // Header stat table
-            Constraint::Fill(1),   // Main content pane
-            Constraint::Length(1), // Help footer
+            Constraint::Length(6),                // Header stat table
+            Constraint::Fill(1),                  // Main content pane
+            Constraint::Length(shortcuts_height), // Proper shortcuts pane / compact fallback
         ])
         .split(area);
 
@@ -782,52 +935,38 @@ impl Screen for MirrorsScreen {
             MirrorViewMode::Custom => self.draw_custom(f, chunks[1]),
         }
 
-        // Help footer
-        let hints = match self.mode {
-            MirrorViewMode::List => vec![
-                "↑↓ navigate",
-                "enter/v view",
-                "R rank",
-                "b benchmark",
-                "B backup",
-                "U restore",
-                "A bulk rank",
-                "M bench all",
-                "c custom",
-                "r refresh",
-                "esc back",
-            ],
-            MirrorViewMode::Detail => vec![
-                "↑↓ scroll mirrors",
-                "R rank provider",
-                "b benchmark",
-                "B backup",
-                "U restore",
-                "v raw mirrorlist",
-                "esc return to list",
-            ],
-            MirrorViewMode::BulkRank => vec![
-                "↑↓ navigate",
-                "space toggle",
-                "a select/deselect all",
-                "enter start ranking",
-                "esc cancel",
-            ],
-            MirrorViewMode::Benchmark => vec!["esc cancel / return"],
-            MirrorViewMode::Restore => vec![
-                "↑↓ navigate backups",
-                "enter restore selected",
-                "p preview content",
-                "esc cancel",
-            ],
-            MirrorViewMode::Custom => vec![
-                "↑↓ navigate",
-                "a add custom provider",
-                "d delete provider",
-                "esc return to list",
-            ],
-        };
-        widgets::help_bar(f, chunks[2], &hints);
+        // Shortcuts pane / help footer
+        if shortcuts_height > 1 {
+            self.draw_shortcuts_pane(f, chunks[2], &shortcuts_items);
+        } else {
+            let hints: Vec<&str> = match self.mode {
+                MirrorViewMode::List => vec![
+                    "↑↓ navigate",
+                    "enter/v view",
+                    "R rank",
+                    "b bench",
+                    "B backup",
+                    "U restore",
+                    "esc back",
+                ],
+                MirrorViewMode::Detail => vec![
+                    "↑↓ scroll",
+                    "R rank",
+                    "b bench",
+                    "B backup",
+                    "U restore",
+                    "v raw",
+                    "esc back",
+                ],
+                MirrorViewMode::BulkRank => {
+                    vec!["space toggle", "a all", "enter rank", "esc cancel"]
+                }
+                MirrorViewMode::Benchmark => vec!["esc cancel"],
+                MirrorViewMode::Restore => vec!["enter restore", "p preview", "esc cancel"],
+                MirrorViewMode::Custom => vec!["a add", "d delete", "esc back"],
+            };
+            widgets::help_bar(f, chunks[2], &hints);
+        }
     }
 
     fn help_hints(&self) -> Vec<&'static str> {
@@ -875,6 +1014,18 @@ impl Screen for MirrorsScreen {
                 Err(e) => {
                     app.toast(format!("Failed to remove provider: {e}"), Sev::Error);
                 }
+            },
+            AwaitKind::EnableRepo(provider_id) => match provider_id.as_str() {
+                "chaotic-aur" => enable_chaotic_aur(app),
+                "cachyos" => enable_cachyos(app),
+                "blackarch" => enable_blackarch(app),
+                _ => {}
+            },
+            AwaitKind::RemoveRepo(provider_id) => match provider_id.as_str() {
+                "chaotic-aur" => remove_chaotic_aur(app),
+                "cachyos" => remove_cachyos(app),
+                "blackarch" => remove_blackarch(app),
+                _ => {}
             },
         }
     }
@@ -1041,6 +1192,60 @@ impl Screen for MirrorsScreen {
                     app.toast("Restore failed.", Sev::Error);
                 }
             }
+            "mirrors-chaotic-aur" | "run-enable-chaotic-aur" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("Chaotic-AUR repository enabled!", Sev::Success);
+                } else {
+                    app.toast("Failed to enable Chaotic-AUR repository.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
+            "mirrors-chaotic-aur-remove" | "run-remove-chaotic-aur" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("Chaotic-AUR repository removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove Chaotic-AUR repository.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
+            "mirrors-cachyos" | "run-enable-cachyos-repo" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("CachyOS repositories enabled!", Sev::Success);
+                } else {
+                    app.toast("Failed to enable CachyOS repositories.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
+            "mirrors-cachyos-remove" | "run-remove-cachyos-repo" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("CachyOS repositories removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove CachyOS repositories.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
+            "mirrors-blackarch" | "run-enable-blackarch" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("BlackArch repository enabled!", Sev::Success);
+                } else {
+                    app.toast("Failed to enable BlackArch repository.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
+            "mirrors-blackarch-remove" | "run-remove-blackarch" => {
+                app.refresh_caps();
+                if ok {
+                    app.toast("BlackArch repository removed!", Sev::Success);
+                } else {
+                    app.toast("Failed to remove BlackArch repository.", Sev::Error);
+                }
+                self.refresh_providers();
+            }
             _ => {}
         }
     }
@@ -1049,8 +1254,80 @@ impl Screen for MirrorsScreen {
 // ── Rendering Implementations ───────────────────────────────────────
 
 impl MirrorsScreen {
+    /// Render Mirror Management directly inside an embedded container (such as the HomeScreen main pane).
+    pub fn draw_embedded(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let shortcuts_items = self.shortcuts_for_mode();
+        let inner_width = area.width.saturating_sub(2);
+        let num_cols = if inner_width >= 105 {
+            3
+        } else if inner_width >= 60 {
+            2
+        } else {
+            1
+        };
+        let needed_rows = shortcuts_items.len().div_ceil(num_cols);
+        let needed_height = (needed_rows + 2) as u16;
+
+        let (content_area, shortcuts_area) = if area.height >= 14 {
+            let max_shortcuts = area.height.saturating_sub(7);
+            let s_height = needed_height.min(max_shortcuts).max(3);
+            let chunks = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(s_height),
+            ])
+            .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
+        match self.mode {
+            MirrorViewMode::List => self.draw_provider_list(f, content_area),
+            MirrorViewMode::Detail => self.draw_provider_detail(f, content_area),
+            MirrorViewMode::BulkRank => self.draw_bulk_rank(f, content_area),
+            MirrorViewMode::Benchmark => self.draw_benchmark(f, content_area),
+            MirrorViewMode::Restore => self.draw_restore(f, content_area),
+            MirrorViewMode::Custom => self.draw_custom(f, content_area),
+        }
+
+        if let Some(s_area) = shortcuts_area {
+            self.draw_shortcuts_pane(f, s_area, &shortcuts_items);
+        }
+    }
+
+    /// Render contextual shortcuts into a dedicated area (such as the HomeScreen command list footer).
+    #[allow(dead_code)]
+    pub fn draw_shortcuts(&self, f: &mut Frame<'_>, area: Rect) {
+        let items = self.shortcuts_for_mode();
+        self.draw_shortcuts_pane(f, area, &items);
+    }
+
+    /// Check if currently viewing a submode (Detail, BulkRank, Benchmark, Restore, Custom).
+    pub fn is_in_submode(&self) -> bool {
+        self.mode != MirrorViewMode::List
+    }
+
+    /// Return from any submode back to the main provider overview.
+    pub fn exit_submode(&mut self) {
+        self.mode = MirrorViewMode::List;
+    }
+
     fn draw_provider_list(&mut self, f: &mut Frame<'_>, area: Rect) {
-        let block = panel("📦 Repository Providers & Mirrorlists");
+        let total_active: usize = self
+            .providers
+            .iter()
+            .map(|p| p.total_active_mirrors())
+            .sum();
+        let status_desc = format!(
+            " {} active mirrors · reflector: {} · rate-mirrors: {} ",
+            total_active,
+            if self.reflector_installed { "installed" } else { "missing" },
+            if self.rate_mirrors_installed { "installed" } else { "missing" }
+        );
+        let block = panel_color("Repository Providers & Mirrorlists", cat_color(3)).title_bottom(
+            Line::from(span(status_desc, dim()))
+                .alignment(ratatui::layout::Alignment::Right),
+        );
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -1163,7 +1440,7 @@ impl MirrorsScreen {
             _ => "Available".to_string(),
         };
 
-        let rows = vec![
+        let mut rows = vec![
             ("Provider ID", p.id.to_string()),
             ("Display Name", p.name.clone()),
             ("Distribution", p.dist_type.clone()),
@@ -1175,6 +1452,22 @@ impl MirrorsScreen {
             ("Active Mirrors", p.total_active_mirrors().to_string()),
             ("Backups Stored", self.backups.len().to_string()),
         ];
+        if matches!(p.id.as_str(), "chaotic-aur" | "cachyos" | "blackarch") {
+            let is_enabled = match p.id.as_str() {
+                "chaotic-aur" => crate::sys::is_chaotic_aur_enabled(),
+                "cachyos" => crate::sys::is_cachyos_repo_enabled(),
+                "blackarch" => crate::sys::is_blackarch_enabled(),
+                _ => false,
+            };
+            rows.push((
+                "Repo Action",
+                if is_enabled {
+                    "[X] Remove repository".to_string()
+                } else {
+                    "[E] Enable repository".to_string()
+                },
+            ));
+        }
         kv_table(f, cols[0], "Configuration", &rows);
 
         // Right pane: Active mirrors
@@ -1371,7 +1664,9 @@ impl MirrorsScreen {
         }
 
         f.render_widget(
-            Paragraph::new(lines).block(panel("Benchmark Results")),
+            Paragraph::new(lines)
+                .block(panel("Benchmark Results"))
+                .scroll((self.bench_scroll as u16, 0)),
             chunks[1],
         );
     }
@@ -1460,6 +1755,141 @@ impl MirrorsScreen {
         }
 
         f.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// Retrieve contextual keybindings for the current view mode.
+    fn shortcuts_for_mode(&self) -> Vec<(&'static str, String)> {
+        match self.mode {
+            MirrorViewMode::List => {
+                let (e_desc, x_desc) = if let Some(p) = self.selected_provider() {
+                    (
+                        format!("Enable {} repo", p.name),
+                        format!("Remove {} repo", p.name),
+                    )
+                } else {
+                    (
+                        "Enable repo".to_string(),
+                        "Remove repo".to_string(),
+                    )
+                };
+
+                vec![
+                    ("[↑/k] [↓/j]", "Navigate providers".to_string()),
+                    ("[enter/v]", "Provider detail & mirrors".to_string()),
+                    ("[R]", "Rank selected provider".to_string()),
+                    ("[b]", "Benchmark selected provider".to_string()),
+                    ("[M]", "Benchmark all detected".to_string()),
+                    ("[B]", "Backup mirrorlist archive".to_string()),
+                    ("[U]", "Restore backup history".to_string()),
+                    ("[A]", "Bulk rank multiple providers".to_string()),
+                    ("[c]", "Custom provider manager".to_string()),
+                    ("[r]", "Refresh configuration".to_string()),
+                    ("[E]", e_desc),
+                    ("[X]", x_desc),
+                    ("[esc] [q]", "Back to main menu".to_string()),
+                ]
+            }
+            MirrorViewMode::Detail => {
+                let (e_desc, x_desc) = if let Some(p) = self.selected_provider() {
+                    (
+                        format!("Enable {} repo", p.name),
+                        format!("Remove {} repo", p.name),
+                    )
+                } else {
+                    (
+                        "Enable repo".to_string(),
+                        "Remove repo".to_string(),
+                    )
+                };
+
+                vec![
+                    ("[↑/k] [↓/j]", "Scroll active mirrors".to_string()),
+                    ("[enter/v]", "View raw mirrorlist file".to_string()),
+                    ("[R]", "Rank this provider".to_string()),
+                    ("[b]", "Benchmark active mirrors".to_string()),
+                    ("[B]", "Create timestamped backup".to_string()),
+                    ("[U]", "Restore backup history".to_string()),
+                    ("[E]", e_desc),
+                    ("[X]", x_desc),
+                    ("[esc] [q]", "Return to provider list".to_string()),
+                ]
+            }
+            MirrorViewMode::BulkRank => vec![
+                ("[↑/k] [↓/j]", "Select provider".to_string()),
+                ("[space]", "Toggle provider selection".to_string()),
+                ("[a]", "Select / Deselect all providers".to_string()),
+                ("[enter]", "Confirm and start bulk ranking".to_string()),
+                ("[esc] [q]", "Cancel & return to list".to_string()),
+            ],
+            MirrorViewMode::Benchmark => vec![
+                ("[↑/k] [↓/j]", "Scroll benchmark results".to_string()),
+                ("[esc] [q]", "Stop benchmark job & return".to_string()),
+                ("Live Test", "Measuring latency & download throughput".to_string()),
+            ],
+            MirrorViewMode::Restore => vec![
+                ("[↑/k] [↓/j]", "Select backup archive".to_string()),
+                ("[enter]", "Restore selected backup (atomic)".to_string()),
+                ("[p]", "Preview backup content in viewer".to_string()),
+                ("[esc] [q]", "Cancel & return to detail/list".to_string()),
+            ],
+            MirrorViewMode::Custom => vec![
+                ("[↑/k] [↓/j]", "Select custom provider".to_string()),
+                ("[a]", "Add custom provider (wizard)".to_string()),
+                ("[d]", "Delete selected custom provider".to_string()),
+                ("[esc] [q]", "Return to provider list".to_string()),
+            ],
+        }
+    }
+
+    /// Render boxed multi-column shortcuts pane at the bottom of the screen.
+    fn draw_shortcuts_pane(&self, f: &mut Frame<'_>, area: Rect, items: &[(&'static str, String)]) {
+        let block = panel_color("Shortcuts", cat_color(3));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let num_cols = if inner.width >= 105 {
+            3
+        } else if inner.width >= 60 {
+            2
+        } else {
+            1
+        };
+
+        let col_constraints = match num_cols {
+            3 => vec![
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ],
+            2 => vec![
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ],
+            _ => vec![Constraint::Percentage(100)],
+        };
+
+        let cols = Layout::horizontal(col_constraints).split(inner);
+        let items_per_col = items.len().div_ceil(num_cols);
+
+        for (col_idx, chunk) in cols.iter().enumerate() {
+            let start = col_idx * items_per_col;
+            let end = (start + items_per_col).min(items.len());
+            if start >= items.len() {
+                continue;
+            }
+
+            let lines: Vec<Line> = items[start..end]
+                .iter()
+                .map(|(k, d)| {
+                    Line::from(vec![
+                        span(format!("{k:<13}"), styled(cat_color(1))),
+                        span(format!(" {d}"), dim()),
+                    ])
+                })
+                .collect();
+
+            f.render_widget(Paragraph::new(lines), *chunk);
+        }
     }
 }
 
@@ -1777,6 +2207,20 @@ mod tests {
         assert!(text.contains("Provider"));
         assert!(text.contains("Status"));
         assert!(text.contains("Arch Linux"));
+        assert!(text.contains("Shortcuts"));
+        assert!(text.contains("[R]"));
+        assert!(text.contains("[b]"));
+        assert!(text.contains("[M]"));
+        assert!(text.contains("[B]"));
+        assert!(text.contains("[U]"));
+        assert!(text.contains("[A]"));
+        assert!(text.contains("[c]"));
+        assert!(text.contains("[r]"));
+        assert!(text.contains("[E]"));
+        assert!(text.contains("[X]"));
+        assert!(text.contains("Enable Arch Linux repo"));
+        assert!(text.contains("Remove Arch Linux repo"));
+        assert!(!text.contains("3rd-party"));
     }
 
     #[test]
@@ -1792,6 +2236,13 @@ mod tests {
         assert!(text.contains("Provider Detail:"));
         assert!(text.contains("Configuration"));
         assert!(text.contains("Mirror Targets"));
+        assert!(text.contains("Shortcuts"));
+        assert!(text.contains("[enter/v]"));
+        assert!(text.contains("[E]"));
+        assert!(text.contains("[X]"));
+        assert!(text.contains("Enable Arch Linux repo"));
+        assert!(text.contains("Remove Arch Linux repo"));
+        assert!(!text.contains("3rd-party"));
     }
 
     #[test]
@@ -1870,5 +2321,35 @@ mod tests {
 
         screen.on_ext_done(&mut app, "mirrors-rank-generate", true);
         assert!(screen.pending_plan.is_none()); // Cleaned up upon validation failure!
+    }
+
+    #[test]
+    fn test_mirrors_screen_repo_action_routing() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+
+        // Find blackarch or chaotic-aur index
+        if let Some(idx) = screen.providers.iter().position(|p| p.id.as_str() == "blackarch") {
+            screen.selected_idx = idx;
+            let is_enabled = crate::sys::is_blackarch_enabled();
+            if is_enabled {
+                screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('x')));
+                assert!(matches!(screen.await_kind, Some(AwaitKind::RemoveRepo(_))));
+            } else {
+                screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('e')));
+                assert!(matches!(screen.await_kind, Some(AwaitKind::EnableRepo(_))));
+            }
+
+            // Confirm
+            screen.on_confirm(&mut app, true);
+            assert!(screen.await_kind.is_none());
+        }
+
+        // Test unsupported direct repo setup for arch
+        if let Some(idx) = screen.providers.iter().position(|p| p.id.as_str() == "arch") {
+            screen.selected_idx = idx;
+            screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('e')));
+            assert!(screen.await_kind.is_none());
+        }
     }
 }

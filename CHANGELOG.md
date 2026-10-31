@@ -32,11 +32,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Interactive bulk ranking workflow with provider multi-selection and independent error isolation.
   - User-registered custom provider management stored in `~/.config/archman/custom_mirrors.conf`.
 
+- **Integrated Repository Actions inside Mirror Management (`src/screens/mirrors.rs` & `src/screens/registry.rs`)**:
+  - Integrated direct third-party repository enablement and removal directly into `MirrorsScreen` for Chaotic-AUR, CachyOS, and BlackArch via <kbd>E</kbd> (Enable repository) and <kbd>X</kbd> (Remove repository).
+  - Streamlined Tab 4 to a single, comprehensive **Mirror Management** category, completely eliminating repetitive submenus.
+- **Direct Embedded Mirror Management in Dashboard (`src/screens/home.rs`)**:
+  - Embedded the full mirror provider management table and contextual shortcuts pane directly into the dashboard's right-hand pane when Tab 4 (`🌍 Mirror Management`) is selected.
+  - Presents mirror providers, active target counts, backend statuses, and live keybindings immediately in a clean settings-pane layout without requiring an extra Enter press on a redundant single-action menu.
+- **Dedicated Shortcuts Pane in Mirror Management (`src/screens/mirrors.rs`)**:
+  - Replaced the cramped 1-line footer with a full multi-column boxed shortcuts pane styled after linutil and archman command list conventions.
+  - Dynamically displays mode-specific keybindings for Provider List, Detail View, Bulk Ranking, Benchmarking, Backup Restoration, and Custom Provider management.
+  - Added dedicated <kbd>E</kbd> (Enable repository) and <kbd>X</kbd> (Remove repository) shortcut entries for instant third-party distribution setup and teardown directly from the shortcuts pane.
+  - Responsive layout dynamically adapting between 3 columns (wide terminals), 2 columns (standard terminals), and 1 column/compact fallback (small viewports).
+  - Dynamic content-hugging panel height automatically calculated from the active mode's item count and column count, eliminating empty blank rows at the bottom of the shortcuts box.
+
 ### Fixed
 - **Process Interruption via Ctrl+C (`src/app.rs`)**:
   - Routed <kbd>Ctrl</kbd>+<kbd>C</kbd> while an external command is actively running directly to the embedded runner pane ([`RunPane::handle_key`](file:///home/ankur/github/pacman-utils/src/screens/runpane.rs#L268-L270)).
   - Forwards `SIGINT` (`\x03`) to child processes (e.g. `pacman`, `yay`, `reflector`, `rate-mirrors`), allowing long-running operations to be safely interrupted without terminating `archman`.
   - Preserved global <kbd>Ctrl</kbd>+<kbd>C</kbd> application exit when no command is running.
+
+## [2.2.1] - 2026-09-25
 
 ### Added
 - **Streamlined Repository Submenus (`Add Repositories` & `Remove Repositories`)**:

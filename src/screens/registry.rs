@@ -382,9 +382,15 @@ mod open {
     pub fn mirrors(app: &App) -> Box<dyn Screen> {
         Box::new(mirrors::MirrorsScreen::new(app))
     }
+    #[allow(dead_code)]
+    pub fn repos(app: &App) -> Box<dyn Screen> {
+        Box::new(repos::ReposScreen::new(app, repos::RepoMode::Manage))
+    }
+    #[allow(dead_code)]
     pub fn add_repos(app: &App) -> Box<dyn Screen> {
         Box::new(repos::ReposScreen::new(app, repos::RepoMode::Add))
     }
+    #[allow(dead_code)]
     pub fn remove_repos(app: &App) -> Box<dyn Screen> {
         Box::new(repos::ReposScreen::new(app, repos::RepoMode::Remove))
     }
@@ -649,23 +655,11 @@ pub static MAINTENANCE: [ActionDef; 4] = [
     ),
 ];
 
-pub static MIRRORS: [ActionDef; 3] = [
-    action!(
-        "Mirror Management",
-        "Auto-update or rank mirrors with reflector, back up and restore the mirrorlist.",
-        open::mirrors
-    ),
-    action!(
-        "Add Repositories",
-        "Enable third-party repositories: Chaotic-AUR, CachyOS, and BlackArch.",
-        open::add_repos
-    ),
-    action!(
-        "Remove Repositories",
-        "Remove third-party repositories: Chaotic-AUR, CachyOS, and BlackArch.",
-        open::remove_repos
-    ),
-];
+pub static MIRRORS: [ActionDef; 1] = [action!(
+    "Mirror Management",
+    "Discover, rank, benchmark, and back up mirrorlists, and manage repository configurations across distributions.",
+    open::mirrors
+)];
 
 pub static INFORMATION: [ActionDef; 2] = [
     action!(
@@ -744,7 +738,7 @@ pub static CATEGORIES: [CatDef; 7] = [
         actions: &MAINTENANCE,
     },
     CatDef {
-        title: "🌍 Mirrors & Repos",
+        title: "🌍 Mirror Management",
         actions: &MIRRORS,
     },
     CatDef {
@@ -767,10 +761,8 @@ mod tests {
 
     #[test]
     fn test_mirrors_actions_include_repos() {
-        assert_eq!(MIRRORS.len(), 3);
+        assert_eq!(MIRRORS.len(), 1);
         assert_eq!(MIRRORS[0].label, "Mirror Management");
-        assert_eq!(MIRRORS[1].label, "Add Repositories");
-        assert_eq!(MIRRORS[2].label, "Remove Repositories");
     }
 
     #[test]
@@ -783,7 +775,7 @@ mod tests {
     #[test]
     fn test_categories_count_and_titles() {
         assert_eq!(CATEGORIES.len(), 7);
-        assert_eq!(CATEGORIES[3].title, "🌍 Mirrors & Repos");
+        assert_eq!(CATEGORIES[3].title, "🌍 Mirror Management");
         assert_eq!(CATEGORIES[5].title, "⭐ Extras");
     }
 }
