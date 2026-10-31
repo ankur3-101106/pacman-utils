@@ -5,7 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.1] - 2026-09-25
+## [2.3.0] - 2026-10-31
+
+### Added
+- **Provider-Aware Multi-Distribution Mirror Manager**:
+  - Replaced single-mirrorlist assumptions with a modular, multi-distribution provider architecture.
+  - **Initial 12 Built-in Providers**: Arch Linux (`arch`), CachyOS (`cachyos`), Arch4edu (`arch4edu`), Arch Linux ARM (`archarm`), ArcoLinux (`arcolinux`), Artix Linux (`artix`), BlackArch (`blackarch`), Chaotic-AUR (`chaotic-aur`), Arch Linux CN (`archlinuxcn`), EndeavourOS (`endeavouros`), Manjaro (`manjaro`), and RebornOS (`rebornos`).
+- **Pacman Configuration Discovery Engine (`src/mirrors/discovery.rs`)**:
+  - AST-style parsing of `/etc/pacman.conf` and nested `Include` files with recursive loop prevention and wildcard resolution.
+  - Accurate status detection: `Detected`, `NotConfigured`, `PartiallyConfigured`, `MissingMirrorlist`, `BackendUnavailable`, and `Unsupported`.
+  - Automatic deduplication of mirrorlist targets across repository sections.
+- **Multi-Backend Ranking Engine (`src/mirrors/ranking.rs`)**:
+  - Reflector backend for Arch Linux with country filtering, protocol restrictions, sorting, and age limits.
+  - Verified `rate-mirrors` provider integration with argument safety and output validation.
+  - Native tooling adapter interface for distribution-specific ranking tools (e.g. Manjaro `pacman-mirrors`).
+  - Pre-application candidate validation in Rust, protecting system files against empty output, invalid URLs, or failed rankings.
+- **Real-Time Mirror Benchmarking (`src/mirrors/benchmark.rs`)**:
+  - Live reachability, HTTP status, latency (ms), and download throughput (KB/s) measurements.
+  - Bounded concurrency and bounded timeouts with instantaneous user cancellation (<kbd>Esc</kbd>).
+- **Mirrorlist Backup & Safe Restoration (`src/mirrors/backup.rs`)**:
+  - Automated timestamped backups (`<filename>.bak.<timestamp>`) prior to any file modification.
+  - History viewer, backup file integrity validation, and atomic restoration.
+- **Interactive TUI Mirror Management Screen (`src/screens/mirrors.rs`)**:
+  - Main provider overview table with live detection and backend status indicators.
+  - Detailed provider inspector showing associated repos, resolved paths, and active mirror lists.
+  - Interactive bulk ranking workflow with provider multi-selection and independent error isolation.
+  - User-registered custom provider management stored in `~/.config/archman/custom_mirrors.conf`.
 
 ### Added
 - **Streamlined Repository Submenus (`Add Repositories` & `Remove Repositories`)**:

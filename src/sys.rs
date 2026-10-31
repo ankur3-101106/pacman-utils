@@ -19,6 +19,7 @@ use crate::cmd::{CommandEngine, CommandSpec};
 
 pub const LOCK_FILE: &str = "/var/lib/pacman/db.lck";
 pub const MIRRORLIST: &str = "/etc/pacman.d/mirrorlist";
+#[allow(dead_code)]
 pub const MIRRORLIST_BACKUP: &str = "/etc/pacman.d/mirrorlist.bak";
 pub const PACMAN_LOG: &str = "/var/log/pacman.log";
 pub const CACHE_DIR: &str = "/var/cache/pacman/pkg";

@@ -35,6 +35,7 @@ Single binary, one module per feature:
   - **modals** (`Confirm`/`Input`; empty input = cancel, mirroring v1's bash semantics),
   - toasts, and the queue of **external commands** (`ExtCmd`).
 - `widgets.rs` — reusable pieces: header logo, help overlay, `Menu`, `FuzzyList`, `TextViewer`, `kv_table`, spinner. All styling goes through these helpers; screens never touch crossterm directly.
+- `mirrors/*` — provider-aware multi-distribution mirror manager (`model`, `registry`, `discovery`, `ranking`, `backup`, `benchmark`, `custom`).
 - `sys.rs` — every external interaction: pacman/AUR queries (`si`, `qi`, `-Slq`, orphans, explicit/foreign lists…), capability detection (`Caps::detect`, `has_bin`), mirror/cache/log parsing, and `Job<T>` (background thread + channel so slow/network queries don't freeze drawing).
 - `screens/*` — one module per feature, each exposing small single-purpose screens implementing the `Screen` trait (`handle_key`/`poll`/`draw`/`busy`/`on_confirm`/`on_input`/`on_ext_done`). Shared helpers live in `screens/mod.rs` (`info_lines`, `args`). Query-style screens (OwnerQueryScreen, InfoQueryScreen, ImportScreen) open their input modal from `poll()` on the first tick via an `asked` flag — constructors only get `&App`.
 

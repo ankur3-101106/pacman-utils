@@ -30,7 +30,7 @@ fn color_enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none()
 }
 
-fn styled(fg: Color) -> Style {
+pub fn styled(fg: Color) -> Style {
     if color_enabled() {
         Style::new().fg(fg)
     } else {

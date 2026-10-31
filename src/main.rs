@@ -8,6 +8,7 @@
 mod app;
 pub mod cmd;
 mod fuzzy;
+pub mod mirrors;
 mod pty;
 mod screens;
 mod settings;
@@ -88,14 +89,16 @@ Usage:
   archman -h        Show this help
 
 Configuration:
-  {settings_dir}/settings.conf    Settings
-  {settings_dir}/favorites.txt    Favorite packages
-  {settings_dir}/archman.log      Activity log
+  {settings_dir}/settings.conf          Settings
+  {settings_dir}/favorites.txt          Favorite packages
+  {settings_dir}/custom_mirrors.conf    Custom mirror providers
+  {settings_dir}/archman.log            Activity log
 
 Dependencies (optional):
   yay / paru        AUR helper
   brew              Homebrew package manager
-  reflector         Mirror management
+  reflector         Mirror management (Arch Linux)
+  rate-mirrors      Multi-distribution mirror ranking
   pacman-contrib    Cache cleaning (paccache) and update checks (checkupdates)
 "#
     );

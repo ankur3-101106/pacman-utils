@@ -308,19 +308,14 @@ impl App {
     // ── Input routing ───────────────────────────────────────────────
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.quit = true;
-            return;
-        }
-
         // The cheatsheet overlay swallows one key to close itself.
         if self.help_open {
             self.help_open = false;
             return;
         }
 
-        // Embedded runner gets all keys while active; any key closes it
-        // once the command finished, routing the result.
+        // Embedded runner gets all keys while active (forwarding Ctrl+C as SIGINT
+        // to interrupt the running child); any key closes it once finished.
         if let Some(pane) = self.embedded.as_mut() {
             if pane.is_running() {
                 pane.handle_key(key);
@@ -330,6 +325,11 @@ impl App {
                 self.embedded = None;
                 self.complete_ext(&tag, ok);
             }
+            return;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.quit = true;
             return;
         }
 
@@ -670,6 +670,41 @@ mod bleed_tests {
         assert!(
             row < buf.area.height as usize - 1,
             "toast on window bottom row"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_quits_app_when_no_runner() {
+        let mut app = App::new();
+        assert!(!app.quit);
+        let ctrl_c = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+        app.on_key(ctrl_c);
+        assert!(
+            app.quit,
+            "Ctrl+C should quit app when no command is running"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_forwarded_to_running_pane_does_not_quit_app() {
+        let mut app = App::new();
+        let cmd = ExtCmd::interactive("test", "cat", &[]);
+        let pane =
+            crate::screens::runpane::RunPane::with_engine(app.engine(), &cmd, 24, 80).unwrap();
+        app.embedded = Some(pane);
+
+        let ctrl_c = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+        app.on_key(ctrl_c);
+
+        assert!(
+            !app.quit,
+            "Ctrl+C while a command is running must not quit archman itself"
         );
     }
 }

@@ -69,7 +69,7 @@
 | 🛡 | **Preflight & Preview** | Preflight safety checks (database lock, active PIDs, disk space, privileges, network) and non-destructive transaction previews before execution |
 | ⬆ | **System** | Update check (`checkupdates`), database refresh, full upgrades via pacman or your AUR helper |
 | 🧹 | **Maintenance** | Cache cleaning (`paccache -rkN`, `-Sc`, `-Scc`), safe `db.lck` removal |
-| 🌍 | **Mirrors & Repos** | `reflector` auto-update & ranking, mirrorlist backup/restore, add & remove third-party repositories (Chaotic-AUR, CachyOS, BlackArch) |
+| 🌍 | **Mirrors & Repos** | Provider-aware mirror management (12 distributions), Reflector & `rate-mirrors` ranking, real-time benchmarking, backup/restore, bulk ranking, custom providers |
 | 📊 | **Information** | System dashboard, dependency check with one-key installs |
 | ⭐ | **Extras** | Favorite packages, 13 curated package groups (incl. BlackArch pentesting tools), list import, Homebrew (`brew`) installer & uninstaller |
 | ⚙ | **Settings** | AUR helper (`yay`/`paru`), dry-run mode, independent confirmation controls, logging, cache retention |
@@ -100,6 +100,65 @@ Confirmation controls are strictly separated for safety and flexibility:
 | `CONFIRM_ACTIONS` | Controls whether **archman's TUI** prompts for confirmation before launching operations | `true` |
 | `NATIVE_CONFIRM` | Controls whether the **underlying package manager** (`pacman`/`yay`/`paru`) prompts natively (when `false`, appends `--noconfirm` to supported transactions) | `true` |
 | `DRY_RUN` | Simulates execution without modifying packages or system state | `false` |
+
+---
+
+## 🌍 Provider-Aware Mirror Management
+
+`archman` features a complete, distribution-aware mirror manager that replaces the traditional single-mirrorlist assumption with independent discovery and management across repository providers.
+
+### Supported Built-in Providers
+
+| Provider | Identifier | Ranking Backend | Distribution / Type |
+|---|---|---|---|
+| Arch Linux | `arch` | Reflector / rate-mirrors | Official Arch Linux |
+| CachyOS | `cachyos` | rate-mirrors | Optimized x86-64-v3/v4/zen4 packages |
+| Arch4edu | `arch4edu` | rate-mirrors | Academic & research software |
+| Arch Linux ARM | `archarm` | rate-mirrors | ARMv7/AArch64 packages |
+| ArcoLinux | `arcolinux` | rate-mirrors | ArcoLinux desktop ecosystem |
+| Artix Linux | `artix` | rate-mirrors | OpenRC/runit/s6 distribution |
+| BlackArch | `blackarch` | rate-mirrors | Penetration testing & security |
+| Chaotic-AUR | `chaotic-aur` | rate-mirrors | Pre-built automated AUR binaries |
+| Arch Linux CN | `archlinuxcn` | rate-mirrors | Community Chinese localized packages |
+| EndeavourOS | `endeavouros` | rate-mirrors | EndeavourOS desktop packages |
+| Manjaro | `manjaro` | rate-mirrors / pacman-mirrors | Manjaro branch repositories |
+| RebornOS | `rebornos` | rate-mirrors | RebornOS desktop distribution |
+
+### Key Capabilities
+
+- **Automatic Provider Discovery:**
+  - Safely parses `/etc/pacman.conf` and nested `Include` files (including directory wildcard patterns such as `/etc/pacman.conf.d/*.conf`).
+  - Resolves actual filesystem paths and associates repository sections with known distributions without modifying `pacman.conf`.
+  - Distinguishes exact statuses: `Detected`, `Not Configured`, `Partially Configured`, `Missing Mirrorlist`, `Backend Unavailable`, and `Unsupported`.
+- **Multi-Backend Ranking Engine:**
+  - **Reflector Adapter:** Country filtering, protocols (HTTPS), latest mirrors, sorting criteria, and maximum mirror age.
+  - **rate-mirrors Integration:** Verified distribution subcommands, timeout bounds, and country filtering.
+  - **Native Tooling Adapter:** Distribution-native utilities (e.g. `pacman-mirrors` on Manjaro).
+- **Ranking Safety Pipeline:**
+  1. Resolves and validates exact target mirrorlist paths.
+  2. Creates timestamped safety backups (`<mirrorlist>.bak.<timestamp>`).
+  3. Generates candidate mirror output to a secure temporary file.
+  4. Validates candidate syntax, non-emptiness, and URLs in Rust before touching system files.
+  5. Displays candidate change preview and requires user confirmation.
+  6. Atomically replaces target file, preserving permissions and ownership.
+  7. Safely cleans up temporary files.
+- **Real-Time Mirror Benchmarking:**
+  - Collects HTTP status, response latency (ms), and download throughput (KB/s) per mirror.
+  - Bounded concurrency and bounded timeouts prevent network saturation.
+  - Live cancellation token support (<kbd>Esc</kbd>) to stop benchmarks immediately.
+  - Tested individually, per-mirrorlist, or across all detected providers.
+- **Backup & Restore Management:**
+  - Separate timestamped backups per mirrorlist file.
+  - Interactive backup history browser with file size and active mirror counts.
+  - Validates backup integrity prior to atomic restoration.
+- **Bulk Ranking Workflow:**
+  - Interactive multi-provider selection (<kbd>Space</kbd> / <kbd>a</kbd>).
+  - Summarizes affected targets and ranking backends before execution.
+  - Executes operations sequentially with independent failure isolation.
+- **Custom Provider Registration:**
+  - Register custom repositories and mirrorlists stored in `~/.config/archman/custom_mirrors.conf`.
+  - Validates paths, unique identifiers, and backend configurations.
+
 
 ---
 
@@ -179,7 +238,8 @@ cd pacman-utils
 | Rust Toolchain | **Build Only** | [rustup](https://rustup.rs) or `sudo pacman -S rust` |
 | `yay` / `paru` | *Optional* | AUR helper integration |
 | `brew` | *Optional* | Homebrew package manager support |
-| `reflector` | *Optional* | Mirrorlist ranking & auto-update |
+| `reflector` | *Optional* | Arch Linux mirrorlist ranking & filtering |
+| `rate-mirrors` | *Optional* | Fast multi-distribution mirror ranking |
 | `pacman-contrib` | *Optional* | Cache cleaning (`paccache`) & update checks (`checkupdates`) |
 
 ---
@@ -192,6 +252,7 @@ Configuration files are stored in `~/.config/archman/` (auto-generated on first 
 |:---|:---|
 | `settings.conf` | AUR helper, dry-run mode, confirmation toggles, logging, cache retention |
 | `favorites.txt` | Your starred / favorite packages list |
+| `custom_mirrors.conf` | User-defined custom mirror providers and repositories |
 | `archman.log` | Historical activity and execution log |
 
 ---

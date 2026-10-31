@@ -1,150 +1,265 @@
 // ──────────────────────────────────────────────────────────────────────
-// mirrors.rs — Mirror management (lib/mirrors.sh)
+// mirrors.rs — Provider-Aware Multi-Distribution Mirror Management
 //
-// reflector integration with automatic backup, plus manual backup and
-// restore of /etc/pacman.d/mirrorlist.
+// Integrated provider discovery, per-provider mirrorlist resolution,
+// Reflector & rate-mirrors ranking, real-time benchmarking, timestamped
+// backup & restore, bulk ranking, and custom provider configuration.
 // ──────────────────────────────────────────────────────────────────────
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Style,
-    text::Span,
+    text::{Line, Span},
+    widgets::Paragraph,
     Frame,
 };
 
 use crate::app::{App, ExtCmd, Screen};
-use crate::sys::{self, MIRRORLIST, MIRRORLIST_BACKUP};
-use crate::widgets::{self, kv_table, Menu, Sev};
+use crate::mirrors::{
+    add_custom_provider, build_backup_command, build_restore_command, create_ranking_plan,
+    current_timestamp, discover_providers, list_backups, load_custom_providers,
+    remove_custom_provider, spawn_benchmark_job, validate_candidate_file, BackupEntry,
+    BenchmarkProgress, BenchmarkResult, CustomProvider, DetectionStatus, MirrorProvider,
+    ProviderId, RankingBackend, RankingPlan,
+};
+#[allow(unused_imports)]
+pub use crate::sys::{MIRRORLIST, MIRRORLIST_BACKUP};
+use crate::widgets::{
+    self, accent, accent_bold, cat_color, danger, dim, hint, kv_table, panel, panel_color,
+    selected_style, span, success, warning, Sev,
+};
 
 use super::{args, viewer::ViewerScreen};
 
-const MENU_ITEMS: [&str; 8] = [
-    "🔄 Auto-update mirrors (reflector)",
-    "🏎  Rank fastest mirrors",
-    "📋 Show current mirrors",
-    "💾 Backup current mirrorlist",
-    "♻  Restore mirrorlist from backup",
-    "➕ Add repositories",
-    "➖ Remove repositories",
-    "🔙 Back to Main Menu",
-];
+/// Display mode discriminant for the mirror manager screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MirrorViewMode {
+    /// Main table listing all discovered and supported providers.
+    List,
+    /// Detailed inspection view for the selected provider.
+    Detail,
+    /// Bulk selection and ranking workflow.
+    BulkRank,
+    /// Live performance benchmarking view.
+    Benchmark,
+    /// Timestamped backup history and restore selector.
+    Restore,
+    /// Custom provider management view.
+    Custom,
+}
 
-/// What an open modal refers to.
-enum Await {
+/// What an open confirmation or input modal refers to.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum AwaitKind {
     InstallReflector,
-    RestoreBackup,
+    ApplyRanking,
+    RestoreBackup(PathBuf, PathBuf),
+    StartBulkRank,
+    DeleteCustomProvider(String),
 }
 
-#[derive(Clone, Copy)]
-enum ReflectorMode {
-    Auto,
-    Rank,
-}
-
-impl ReflectorMode {
-    fn tag(self) -> &'static str {
-        match self {
-            ReflectorMode::Auto => "mirrors-auto",
-            ReflectorMode::Rank => "mirrors-rank",
-        }
-    }
-    fn latest(self) -> &'static str {
-        match self {
-            ReflectorMode::Auto => "20",
-            ReflectorMode::Rank => "10",
-        }
-    }
+/// Input prompt stage when registering a custom provider.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CustomAddStep {
+    Id,
+    Name,
+    MirrorlistPath,
+    Backend,
 }
 
 pub struct MirrorsScreen {
-    menu: Menu,
-    /// Snapshot for the stats table; refreshed when reflector is installed.
+    mode: MirrorViewMode,
+    providers: Vec<MirrorProvider>,
+    selected_idx: usize,
+    list_offset: usize,
+
+    // Detail view state
+    detail_mirror_idx: usize,
+    detail_scroll: usize,
+
+    // Bulk selection state
+    bulk_selected: Vec<bool>,
+    bulk_idx: usize,
+
+    // Benchmark state
+    bench_rx: Option<Receiver<BenchmarkProgress>>,
+    bench_results: Vec<BenchmarkResult>,
+    bench_cancel: Option<Arc<AtomicBool>>,
+    bench_progress_msg: String,
+    bench_finished: bool,
+
+    // Backup & Restore state
+    backups: Vec<BackupEntry>,
+    selected_backup_idx: usize,
+
+    // Custom provider state
+    custom_providers: Vec<CustomProvider>,
+    selected_custom_idx: usize,
+    custom_add_step: Option<CustomAddStep>,
+    custom_add_id: String,
+    custom_add_name: String,
+    custom_add_path: String,
+    custom_add_backend: String,
+
+    // Ranking pending plan
+    pending_plan: Option<RankingPlan>,
+
+    // Modal await kind
+    await_kind: Option<AwaitKind>,
+
+    // Capability snapshots
     reflector_installed: bool,
-    chaotic_aur_enabled: bool,
-    cachyos_enabled: bool,
-    blackarch_enabled: bool,
-    /// Pending country prompt target.
-    country_for: Option<ReflectorMode>,
-    await_kind: Option<Await>,
+    rate_mirrors_installed: bool,
 }
 
 impl MirrorsScreen {
     pub fn new(app: &App) -> Self {
         let caps = app.caps();
+        let providers = discover_providers();
+        let bulk_selected = vec![true; providers.len()];
+        let custom_providers = load_custom_providers();
+
         Self {
-            menu: Menu::new(
-                "Mirror & Repository actions",
-                MENU_ITEMS.map(str::to_string).to_vec(),
-            ),
-            reflector_installed: caps.reflector,
-            chaotic_aur_enabled: caps.chaotic_aur,
-            cachyos_enabled: caps.cachyos,
-            blackarch_enabled: caps.blackarch,
-            country_for: None,
+            mode: MirrorViewMode::List,
+            providers,
+            selected_idx: 0,
+            list_offset: 0,
+
+            detail_mirror_idx: 0,
+            detail_scroll: 0,
+
+            bulk_selected,
+            bulk_idx: 0,
+
+            bench_rx: None,
+            bench_results: Vec::new(),
+            bench_cancel: None,
+            bench_progress_msg: String::new(),
+            bench_finished: false,
+
+            backups: Vec::new(),
+            selected_backup_idx: 0,
+
+            custom_providers,
+            selected_custom_idx: 0,
+            custom_add_step: None,
+            custom_add_id: String::new(),
+            custom_add_name: String::new(),
+            custom_add_path: String::new(),
+            custom_add_backend: String::new(),
+
+            pending_plan: None,
             await_kind: None,
+
+            reflector_installed: caps.reflector,
+            rate_mirrors_installed: crate::sys::has_bin("rate-mirrors"),
         }
     }
 
-    /// Queue reflector run preceded by a silent backup, like the bash flow.
-    fn run_reflector(&mut self, app: &mut App, mode: ReflectorMode, country: Option<String>) {
-        app.log(&format!(
-            "MIRRORS: {}",
-            match mode {
-                ReflectorMode::Auto => "Auto-updating mirrors with reflector",
-                ReflectorMode::Rank => "Ranking fastest mirrors",
-            }
-        ));
-
-        // Silent safety backup first (bash: sudo cp before running).
-        app.queue_ext(
-            ExtCmd::new(
-                "mirrors-pre-backup",
-                "sudo",
-                &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]),
-            )
-            .note("Backing up current mirrorlist"),
-        );
-
-        let mut cmd_args: Vec<String> = vec!["reflector".into()];
-        if let Some(c) = country.clone() {
-            cmd_args.push("--country".into());
-            cmd_args.push(c);
+    /// Refresh discovered providers from pacman configuration.
+    pub fn refresh_providers(&mut self) {
+        self.providers = discover_providers();
+        if self.bulk_selected.len() != self.providers.len() {
+            self.bulk_selected = vec![true; self.providers.len()];
         }
-        cmd_args.push("--latest".into());
-        cmd_args.push(mode.latest().into());
-        cmd_args.push("--sort".into());
-        cmd_args.push("rate".into());
-        cmd_args.push("--save".into());
-        cmd_args.push(MIRRORLIST.into());
+        if self.selected_idx >= self.providers.len() && !self.providers.is_empty() {
+            self.selected_idx = self.providers.len() - 1;
+        }
+        self.custom_providers = load_custom_providers();
+        self.reflector_installed = crate::sys::has_bin("reflector");
+        self.rate_mirrors_installed = crate::sys::has_bin("rate-mirrors");
+    }
 
-        if let Some(c) = &country {
+    pub fn selected_provider(&self) -> Option<&MirrorProvider> {
+        self.providers.get(self.selected_idx)
+    }
+
+    pub fn selected_provider_mut(&mut self) -> Option<&mut MirrorProvider> {
+        self.providers.get_mut(self.selected_idx)
+    }
+
+    /// Switch to detailed inspection of the currently selected provider.
+    pub fn open_detail(&mut self) {
+        if self.selected_provider().is_some() {
+            self.mode = MirrorViewMode::Detail;
+            self.detail_mirror_idx = 0;
+            self.detail_scroll = 0;
+            self.refresh_backups_for_selected();
+        }
+    }
+
+    /// Refresh backups for the currently selected provider's primary target.
+    fn refresh_backups_for_selected(&mut self) {
+        if let Some(p) = self.selected_provider() {
+            if let Some(target) = p.primary_mirrorlist() {
+                self.backups = list_backups(target);
+                self.selected_backup_idx = 0;
+            } else {
+                self.backups.clear();
+            }
+        }
+    }
+
+    /// Start mirror ranking for the currently selected provider.
+    pub fn start_rank_selected(&mut self, app: &mut App) {
+        let Some(provider) = self.selected_provider().cloned() else {
+            return;
+        };
+
+        if !provider.is_supported() {
             app.toast(
                 format!(
-                    "Using: --country '{c}' --latest {} --sort rate",
-                    mode.latest()
+                    "Provider '{}' does not have a supported ranking backend",
+                    provider.name
                 ),
-                Sev::Info,
+                Sev::Warn,
             );
-        } else {
-            app.toast(
-                format!("Using: --latest {} --sort rate", mode.latest()),
-                Sev::Info,
-            );
+            return;
         }
 
-        app.queue_ext(
-            ExtCmd::new(mode.tag(), "sudo", &cmd_args)
-                .note(match mode {
-                    ReflectorMode::Auto => "Fetching and ranking mirrors...",
-                    ReflectorMode::Rank => "Testing mirror speeds...",
-                })
-                .result(
-                    "Mirrorlist updated!",
-                    "reflector failed. Restoring backup...",
-                    "MIRRORS: reflector run finished",
-                ),
-        );
+        match &provider.backend {
+            RankingBackend::Reflector { .. } => {
+                if !self.reflector_installed && !self.rate_mirrors_installed {
+                    app.toast(
+                        "Neither reflector nor rate-mirrors is installed.",
+                        Sev::Warn,
+                    );
+                    if app.settings().is_true("CONFIRM_ACTIONS") {
+                        app.confirm("Install reflector?", false);
+                        self.await_kind = Some(AwaitKind::InstallReflector);
+                    } else {
+                        self.execute_install_reflector(app);
+                    }
+                    return;
+                }
+                // Reflector can ask for country filter
+                app.ask_input("Country name or code for Reflector (leave blank for global):");
+            }
+            RankingBackend::RateMirrors { .. } => {
+                if !self.rate_mirrors_installed {
+                    app.toast("rate-mirrors executable is not installed.", Sev::Error);
+                    return;
+                }
+                self.execute_ranking_for_provider(app, &provider, None);
+            }
+            RankingBackend::Native { executable, .. } => {
+                if !crate::sys::has_bin(executable) {
+                    app.toast(format!("{executable} is not installed."), Sev::Error);
+                    return;
+                }
+                self.execute_ranking_for_provider(app, &provider, None);
+            }
+            RankingBackend::Unsupported => {
+                app.toast("Unsupported ranking backend", Sev::Warn);
+            }
+        }
     }
 
     fn execute_install_reflector(&self, app: &mut App) {
@@ -160,23 +275,1203 @@ impl MirrorsScreen {
         );
     }
 
-    fn execute_restore_backup(&self, app: &mut App) {
-        app.log("MIRRORS: Restoring mirrorlist from backup");
-        app.queue_ext(
-            ExtCmd::new(
-                "mirrors-restore",
-                "sudo",
-                &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]),
-            )
-            .note("Restore mirrorlist from backup")
-            .result(
-                "Mirrorlist restored!",
-                "Restore failed.",
-                "MIRRORS: restore finished",
-            ),
+    /// Build ranking plan and queue candidate generation.
+    fn execute_ranking_for_provider(
+        &mut self,
+        app: &mut App,
+        provider: &MirrorProvider,
+        country: Option<String>,
+    ) {
+        let reflector_opts = country.map(|c| crate::mirrors::ReflectorOptions {
+            country: Some(c),
+            ..Default::default()
+        });
+
+        match create_ranking_plan(provider, None, reflector_opts.as_ref(), None) {
+            Ok(plan) => {
+                app.log(&format!(
+                    "MIRRORS: Ranking mirrors for {} via {}",
+                    provider.name,
+                    provider.backend.name()
+                ));
+                app.toast(
+                    format!("Testing & ranking mirrors for {}...", provider.name),
+                    Sev::Info,
+                );
+
+                self.pending_plan = Some(plan.clone());
+                app.queue_ext(plan.generate_cmd.result(
+                    "Candidate mirrors generated. Validating...",
+                    "Mirror ranking failed.",
+                    "MIRRORS: candidate generation finished",
+                ));
+            }
+            Err(e) => {
+                app.toast(format!("Ranking setup failed: {e}"), Sev::Error);
+            }
+        }
+    }
+
+    /// Start real-time benchmarking for the selected provider's active mirrors.
+    pub fn start_benchmark_selected(&mut self, app: &mut App) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+
+        let mut urls = Vec::new();
+        for target in &p.mirrorlists {
+            for mirror in &target.active_mirrors {
+                if !urls.contains(&mirror.url) {
+                    urls.push(mirror.url.clone());
+                }
+            }
+        }
+
+        if urls.is_empty() {
+            app.toast(
+                format!("No active mirrors found for provider '{}'", p.name),
+                Sev::Warn,
+            );
+            return;
+        }
+
+        app.toast(
+            format!("Starting benchmark for {} mirrors...", urls.len()),
+            Sev::Info,
         );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let rx = spawn_benchmark_job(urls, Arc::clone(&cancel));
+
+        self.bench_rx = Some(rx);
+        self.bench_cancel = Some(cancel);
+        self.bench_results.clear();
+        self.bench_finished = false;
+        self.bench_progress_msg = "Initializing mirror benchmark...".to_string();
+        self.mode = MirrorViewMode::Benchmark;
+    }
+
+    /// Start benchmarking all detected providers.
+    pub fn start_benchmark_all_detected(&mut self, app: &mut App) {
+        let mut urls = Vec::new();
+        for p in &self.providers {
+            if p.detection.is_detected() {
+                for target in &p.mirrorlists {
+                    for mirror in &target.active_mirrors {
+                        if !urls.contains(&mirror.url) {
+                            urls.push(mirror.url.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if urls.is_empty() {
+            app.toast(
+                "No active mirrors found across detected providers",
+                Sev::Warn,
+            );
+            return;
+        }
+
+        app.toast(
+            format!(
+                "Benchmarking all {} mirrors across detected providers...",
+                urls.len()
+            ),
+            Sev::Info,
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let rx = spawn_benchmark_job(urls, Arc::clone(&cancel));
+
+        self.bench_rx = Some(rx);
+        self.bench_cancel = Some(cancel);
+        self.bench_results.clear();
+        self.bench_finished = false;
+        self.bench_progress_msg = "Benchmarking all detected providers...".to_string();
+        self.mode = MirrorViewMode::Benchmark;
+    }
+
+    /// Create manual backup for the selected provider.
+    pub fn backup_selected(&mut self, app: &mut App) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+        let Some(target) = p.primary_mirrorlist() else {
+            app.toast("No mirrorlist file resolved for provider", Sev::Warn);
+            return;
+        };
+
+        let backup_path = crate::mirrors::generate_backup_path(target);
+        app.log(&format!(
+            "MIRRORS: Backing up {} to {}",
+            target.display(),
+            backup_path.display()
+        ));
+
+        let cmd = build_backup_command(target, &backup_path);
+        app.queue_ext(cmd);
+    }
+
+    /// Open backup history restoration selector.
+    pub fn open_restore_selector(&mut self, app: &mut App) {
+        self.refresh_backups_for_selected();
+        if self.backups.is_empty() {
+            app.toast("No existing backups found for this mirrorlist", Sev::Warn);
+            return;
+        }
+        self.mode = MirrorViewMode::Restore;
+        self.selected_backup_idx = 0;
+    }
+
+    /// Execute bulk ranking across all selected providers.
+    pub fn execute_bulk_rank(&mut self, app: &mut App) {
+        let mut to_rank = Vec::new();
+        for (i, &selected) in self.bulk_selected.iter().enumerate() {
+            if selected && i < self.providers.len() {
+                let p = &self.providers[i];
+                if p.is_supported() && (p.detection.is_detected() || p.is_custom) {
+                    to_rank.push(p.clone());
+                }
+            }
+        }
+
+        if to_rank.is_empty() {
+            app.toast(
+                "No supported providers selected for bulk ranking",
+                Sev::Warn,
+            );
+            return;
+        }
+
+        app.toast(
+            format!("Starting bulk ranking for {} providers...", to_rank.len()),
+            Sev::Info,
+        );
+        app.log(&format!(
+            "MIRRORS: Starting bulk ranking of {} providers",
+            to_rank.len()
+        ));
+
+        // Queue ranking operations
+        for provider in to_rank {
+            self.execute_ranking_for_provider(app, &provider, None);
+        }
     }
 }
+
+impl Screen for MirrorsScreen {
+    fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
+        match self.mode {
+            MirrorViewMode::List => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.selected_idx = self.selected_idx.saturating_sub(1);
+                    if self.selected_idx < self.list_offset {
+                        self.list_offset = self.selected_idx;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.providers.is_empty() {
+                        self.selected_idx = (self.selected_idx + 1).min(self.providers.len() - 1);
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('v') => {
+                    self.open_detail();
+                }
+                KeyCode::Char('R') => {
+                    self.start_rank_selected(app);
+                }
+                KeyCode::Char('b') => {
+                    self.start_benchmark_selected(app);
+                }
+                KeyCode::Char('B') => {
+                    self.backup_selected(app);
+                }
+                KeyCode::Char('U') => {
+                    self.open_restore_selector(app);
+                }
+                KeyCode::Char('A') => {
+                    self.mode = MirrorViewMode::BulkRank;
+                    self.bulk_idx = 0;
+                }
+                KeyCode::Char('M') => {
+                    self.start_benchmark_all_detected(app);
+                }
+                KeyCode::Char('c') => {
+                    self.custom_providers = load_custom_providers();
+                    self.selected_custom_idx = 0;
+                    self.mode = MirrorViewMode::Custom;
+                }
+                KeyCode::Char('r') => {
+                    self.refresh_providers();
+                    app.toast("Refreshed mirror providers and configuration", Sev::Info);
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    app.pop();
+                }
+                _ => {}
+            },
+
+            MirrorViewMode::Detail => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.detail_mirror_idx = self.detail_mirror_idx.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let total = self
+                        .selected_provider()
+                        .map(|p| p.total_active_mirrors())
+                        .unwrap_or(0);
+                    if total > 0 {
+                        self.detail_mirror_idx = (self.detail_mirror_idx + 1).min(total - 1);
+                    }
+                }
+                KeyCode::Char('R') => {
+                    self.start_rank_selected(app);
+                }
+                KeyCode::Char('b') => {
+                    self.start_benchmark_selected(app);
+                }
+                KeyCode::Char('B') => {
+                    self.backup_selected(app);
+                }
+                KeyCode::Char('U') => {
+                    self.open_restore_selector(app);
+                }
+                KeyCode::Char('v') => {
+                    // View raw mirrorlist contents in viewer screen
+                    if let Some(p) = self.selected_provider() {
+                        if let Some(target) = p.primary_mirrorlist() {
+                            if let Ok(content) = std::fs::read_to_string(target) {
+                                let lines: Vec<Vec<Span>> = content
+                                    .lines()
+                                    .map(|l| vec![Span::styled(l.to_string(), Style::new())])
+                                    .collect();
+                                app.push(ViewerScreen::new(
+                                    format!("📋 {}", target.display()),
+                                    lines,
+                                ));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.mode = MirrorViewMode::List;
+                }
+                _ => {}
+            },
+
+            MirrorViewMode::BulkRank => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.bulk_idx = self.bulk_idx.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.providers.is_empty() {
+                        self.bulk_idx = (self.bulk_idx + 1).min(self.providers.len() - 1);
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    if self.bulk_idx < self.bulk_selected.len() {
+                        self.bulk_selected[self.bulk_idx] = !self.bulk_selected[self.bulk_idx];
+                    }
+                }
+                KeyCode::Char('a') => {
+                    let all_set = self.bulk_selected.iter().all(|&s| s);
+                    self.bulk_selected.fill(!all_set);
+                }
+                KeyCode::Enter => {
+                    let selected_count = self.bulk_selected.iter().filter(|&&s| s).count();
+                    if selected_count == 0 {
+                        app.toast("No providers selected for bulk ranking", Sev::Warn);
+                    } else if app.settings().is_true("CONFIRM_ACTIONS") {
+                        app.confirm(
+                            format!("Rank {selected_count} selected providers? Backups will be created first."),
+                            false,
+                        );
+                        self.await_kind = Some(AwaitKind::StartBulkRank);
+                    } else {
+                        self.execute_bulk_rank(app);
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.mode = MirrorViewMode::List;
+                }
+                _ => {}
+            },
+
+            MirrorViewMode::Benchmark => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    if let Some(ref cancel) = self.bench_cancel {
+                        cancel.store(true, Ordering::SeqCst);
+                    }
+                    self.bench_rx = None;
+                    self.mode = MirrorViewMode::List;
+                }
+                _ => {}
+            },
+
+            MirrorViewMode::Restore => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.selected_backup_idx = self.selected_backup_idx.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.backups.is_empty() {
+                        self.selected_backup_idx =
+                            (self.selected_backup_idx + 1).min(self.backups.len() - 1);
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(backup) = self.backups.get(self.selected_backup_idx).cloned() {
+                        let prompt = format!(
+                            "Restore backup from {} ({}) to {}?",
+                            backup.timestamp,
+                            backup.filename(),
+                            backup.mirrorlist_path.display()
+                        );
+                        app.confirm(&prompt, false);
+                        self.await_kind = Some(AwaitKind::RestoreBackup(
+                            backup.backup_path,
+                            backup.mirrorlist_path,
+                        ));
+                    }
+                }
+                KeyCode::Char('p') => {
+                    // Preview backup content
+                    if let Some(backup) = self.backups.get(self.selected_backup_idx) {
+                        if let Ok(content) = std::fs::read_to_string(&backup.backup_path) {
+                            let lines: Vec<Vec<Span>> = content
+                                .lines()
+                                .map(|l| vec![Span::styled(l.to_string(), Style::new())])
+                                .collect();
+                            app.push(ViewerScreen::new(
+                                format!("💾 Backup Preview: {}", backup.filename()),
+                                lines,
+                            ));
+                        }
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.mode = MirrorViewMode::List;
+                }
+                _ => {}
+            },
+
+            MirrorViewMode::Custom => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.selected_custom_idx = self.selected_custom_idx.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.custom_providers.is_empty() {
+                        self.selected_custom_idx =
+                            (self.selected_custom_idx + 1).min(self.custom_providers.len() - 1);
+                    }
+                }
+                KeyCode::Char('a') => {
+                    // Start registration wizard
+                    self.custom_add_step = Some(CustomAddStep::Id);
+                    app.ask_input("Enter Custom Provider ID (e.g. 'myrepo'):");
+                }
+                KeyCode::Char('d') => {
+                    if let Some(p) = self.custom_providers.get(self.selected_custom_idx).cloned() {
+                        let prompt = format!("Remove custom provider definition '{}'?", p.id);
+                        app.confirm(&prompt, false);
+                        self.await_kind = Some(AwaitKind::DeleteCustomProvider(p.id.to_string()));
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.refresh_providers();
+                    self.mode = MirrorViewMode::List;
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn poll(&mut self, app: &mut App) {
+        if let Some(ref mut rx) = self.bench_rx {
+            while let Ok(msg) = rx.try_recv() {
+                self.bench_progress_msg = format!(
+                    "Testing mirror {} of {} — {}",
+                    msg.completed, msg.total, msg.current_mirror
+                );
+                if let Some(res) = msg.result {
+                    self.bench_results.push(res);
+                }
+                if msg.finished {
+                    self.bench_finished = true;
+                    self.bench_progress_msg = format!(
+                        "Benchmark finished! {} mirrors tested.",
+                        self.bench_results.len()
+                    );
+                    app.toast("Mirror benchmarking complete!", Sev::Success);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn busy(&self) -> Option<(String, Instant)> {
+        None
+    }
+
+    fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let total_active: usize = self
+            .providers
+            .iter()
+            .map(|p| p.total_active_mirrors())
+            .sum();
+        let detected_count = self
+            .providers
+            .iter()
+            .filter(|p| p.detection.is_detected())
+            .count();
+
+        let chunks = Layout::vertical([
+            Constraint::Length(6), // Header stat table
+            Constraint::Fill(1),   // Main content pane
+            Constraint::Length(1), // Help footer
+        ])
+        .split(area);
+
+        // Header table
+        kv_table(
+            f,
+            chunks[0],
+            "🌍 Provider-Aware Mirror Management",
+            &[
+                (
+                    "Providers",
+                    format!(
+                        "{} total ({} detected, {} configured)",
+                        self.providers.len(),
+                        detected_count,
+                        self.providers
+                            .iter()
+                            .filter(|p| !p.repos.is_empty())
+                            .count()
+                    ),
+                ),
+                (
+                    "Total Mirrors",
+                    format!("{total_active} active across all providers"),
+                ),
+                (
+                    "Backends",
+                    format!(
+                        "Reflector: {} · rate-mirrors: {}",
+                        if self.reflector_installed {
+                            "installed"
+                        } else {
+                            "not installed"
+                        },
+                        if self.rate_mirrors_installed {
+                            "installed"
+                        } else {
+                            "not installed"
+                        }
+                    ),
+                ),
+            ],
+        );
+
+        // Content pane based on mode
+        match self.mode {
+            MirrorViewMode::List => self.draw_provider_list(f, chunks[1]),
+            MirrorViewMode::Detail => self.draw_provider_detail(f, chunks[1]),
+            MirrorViewMode::BulkRank => self.draw_bulk_rank(f, chunks[1]),
+            MirrorViewMode::Benchmark => self.draw_benchmark(f, chunks[1]),
+            MirrorViewMode::Restore => self.draw_restore(f, chunks[1]),
+            MirrorViewMode::Custom => self.draw_custom(f, chunks[1]),
+        }
+
+        // Help footer
+        let hints = match self.mode {
+            MirrorViewMode::List => vec![
+                "↑↓ navigate",
+                "enter/v view",
+                "R rank",
+                "b benchmark",
+                "B backup",
+                "U restore",
+                "A bulk rank",
+                "M bench all",
+                "c custom",
+                "r refresh",
+                "esc back",
+            ],
+            MirrorViewMode::Detail => vec![
+                "↑↓ scroll mirrors",
+                "R rank provider",
+                "b benchmark",
+                "B backup",
+                "U restore",
+                "v raw mirrorlist",
+                "esc return to list",
+            ],
+            MirrorViewMode::BulkRank => vec![
+                "↑↓ navigate",
+                "space toggle",
+                "a select/deselect all",
+                "enter start ranking",
+                "esc cancel",
+            ],
+            MirrorViewMode::Benchmark => vec!["esc cancel / return"],
+            MirrorViewMode::Restore => vec![
+                "↑↓ navigate backups",
+                "enter restore selected",
+                "p preview content",
+                "esc cancel",
+            ],
+            MirrorViewMode::Custom => vec![
+                "↑↓ navigate",
+                "a add custom provider",
+                "d delete provider",
+                "esc return to list",
+            ],
+        };
+        widgets::help_bar(f, chunks[2], &hints);
+    }
+
+    fn help_hints(&self) -> Vec<&'static str> {
+        vec!["↑↓ navigate", "enter select", "esc back"]
+    }
+
+    fn on_confirm(&mut self, app: &mut App, yes: bool) {
+        let Some(await_kind) = self.await_kind.take() else {
+            return;
+        };
+
+        if !yes {
+            return;
+        }
+
+        match await_kind {
+            AwaitKind::InstallReflector => {
+                self.execute_install_reflector(app);
+            }
+            AwaitKind::ApplyRanking => {
+                if let Some(plan) = self.pending_plan.take() {
+                    app.queue_ext(plan.build_apply_command());
+                }
+            }
+            AwaitKind::RestoreBackup(backup_path, target_path) => {
+                app.log(&format!(
+                    "MIRRORS: Restoring {} from {}",
+                    target_path.display(),
+                    backup_path.display()
+                ));
+                let cmd = build_restore_command(&backup_path, &target_path);
+                app.queue_ext(cmd);
+            }
+            AwaitKind::StartBulkRank => {
+                self.execute_bulk_rank(app);
+            }
+            AwaitKind::DeleteCustomProvider(id) => match remove_custom_provider(&id) {
+                Ok(true) => {
+                    app.toast(format!("Custom provider '{id}' removed."), Sev::Success);
+                    self.refresh_providers();
+                }
+                Ok(false) => {
+                    app.toast(format!("Provider '{id}' not found."), Sev::Warn);
+                }
+                Err(e) => {
+                    app.toast(format!("Failed to remove provider: {e}"), Sev::Error);
+                }
+            },
+        }
+    }
+
+    fn on_input(&mut self, app: &mut App, value: String) {
+        let input = value.trim().to_string();
+
+        // If in custom provider wizard
+        if let Some(step) = self.custom_add_step.take() {
+            match step {
+                CustomAddStep::Id => {
+                    if input.is_empty() {
+                        app.toast("Registration cancelled (empty ID)", Sev::Info);
+                        return;
+                    }
+                    self.custom_add_id = input;
+                    self.custom_add_step = Some(CustomAddStep::Name);
+                    app.ask_input("Enter Display Name (e.g. 'My Custom Repository'):");
+                }
+                CustomAddStep::Name => {
+                    self.custom_add_name = if input.is_empty() {
+                        self.custom_add_id.clone()
+                    } else {
+                        input
+                    };
+                    self.custom_add_step = Some(CustomAddStep::MirrorlistPath);
+                    app.ask_input(
+                        "Enter Absolute Mirrorlist Path (e.g. /etc/pacman.d/myrepo-mirrorlist):",
+                    );
+                }
+                CustomAddStep::MirrorlistPath => {
+                    if input.is_empty() {
+                        app.toast("Registration cancelled (empty path)", Sev::Info);
+                        return;
+                    }
+                    self.custom_add_path = input;
+                    self.custom_add_step = Some(CustomAddStep::Backend);
+                    app.ask_input(
+                        "Enter Backend (rate-mirrors / reflector / native / unsupported):",
+                    );
+                }
+                CustomAddStep::Backend => {
+                    self.custom_add_backend = if input.is_empty() {
+                        "rate-mirrors".to_string()
+                    } else {
+                        input
+                    };
+
+                    let cp = CustomProvider {
+                        id: ProviderId::new(&self.custom_add_id),
+                        name: self.custom_add_name.clone(),
+                        mirrorlist: PathBuf::from(&self.custom_add_path),
+                        backend_type: self.custom_add_backend.clone(),
+                        backend_arg: self.custom_add_id.clone(),
+                        repos: vec![self.custom_add_id.clone()],
+                    };
+
+                    match add_custom_provider(cp) {
+                        Ok(()) => {
+                            app.toast("Custom mirror provider registered!", Sev::Success);
+                            self.refresh_providers();
+                        }
+                        Err(e) => {
+                            app.toast(format!("Registration error: {e}"), Sev::Error);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Reflector country input
+        let country = if input.is_empty() { None } else { Some(input) };
+        if let Some(p) = self.selected_provider().cloned() {
+            self.execute_ranking_for_provider(app, &p, country);
+        }
+    }
+
+    fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
+        match tag {
+            "mirrors-dep" => {
+                app.refresh_caps();
+                self.reflector_installed = app.caps().reflector;
+                if self.reflector_installed {
+                    app.toast("reflector installed successfully.", Sev::Success);
+                } else {
+                    app.toast("Failed to install reflector.", Sev::Error);
+                }
+            }
+            "mirrors-rank-generate" => {
+                if ok {
+                    if let Some(ref plan) = self.pending_plan {
+                        match validate_candidate_file(&plan.candidate_temp_file) {
+                            Ok(mirrors) => {
+                                app.toast(
+                                    format!(
+                                        "Validation passed: {} fast mirrors verified.",
+                                        mirrors.len()
+                                    ),
+                                    Sev::Success,
+                                );
+
+                                if app.settings().is_true("CONFIRM_ACTIONS") {
+                                    let prompt = format!(
+                                        "Apply {} ranked mirrors to {}?",
+                                        mirrors.len(),
+                                        plan.target_mirrorlist.display()
+                                    );
+                                    app.confirm(&prompt, false);
+                                    self.await_kind = Some(AwaitKind::ApplyRanking);
+                                } else {
+                                    app.queue_ext(plan.build_apply_command());
+                                }
+                            }
+                            Err(e) => {
+                                app.toast(format!("Candidate validation failed: {e}"), Sev::Error);
+                                app.log(&format!("MIRRORS: Candidate validation error: {e}"));
+                                let _ = std::fs::remove_file(&plan.candidate_temp_file);
+                                self.pending_plan = None;
+                            }
+                        }
+                    }
+                } else {
+                    app.toast(
+                        "Ranking command failed. Original mirrorlist untouched.",
+                        Sev::Error,
+                    );
+                    if let Some(ref plan) = self.pending_plan {
+                        let _ = std::fs::remove_file(&plan.candidate_temp_file);
+                    }
+                    self.pending_plan = None;
+                }
+            }
+            "mirrors-apply-rank" => {
+                if ok {
+                    app.toast("Mirrorlist updated and verified!", Sev::Success);
+                    app.log("MIRRORS: Ranking applied successfully");
+                    let ts = current_timestamp();
+                    if let Some(idx) = self.selected_provider_mut() {
+                        idx.last_ranked = Some(ts);
+                    }
+                    self.refresh_providers();
+                } else {
+                    app.toast("Failed to apply ranked mirrorlist.", Sev::Error);
+                }
+                self.pending_plan = None;
+            }
+            "mirrors-backup" => {
+                if ok {
+                    app.toast("Mirrorlist backed up.", Sev::Success);
+                    app.log("MIRRORS: Backup successful");
+                    self.refresh_backups_for_selected();
+                } else {
+                    app.toast("Backup failed.", Sev::Error);
+                }
+            }
+            "mirrors-restore" => {
+                if ok {
+                    app.toast("Mirrorlist restored from backup!", Sev::Success);
+                    app.log("MIRRORS: Mirrorlist restored");
+                    self.refresh_providers();
+                    self.refresh_backups_for_selected();
+                } else {
+                    app.toast("Restore failed.", Sev::Error);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Rendering Implementations ───────────────────────────────────────
+
+impl MirrorsScreen {
+    fn draw_provider_list(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let block = panel("📦 Repository Providers & Mirrorlists");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let visible_height = inner.height.saturating_sub(2) as usize;
+        if self.selected_idx >= self.list_offset + visible_height && visible_height > 0 {
+            self.list_offset = self.selected_idx + 1 - visible_height;
+        }
+
+        let mut lines = Vec::new();
+
+        // Table column headers
+        lines.push(Line::from(vec![
+            span("  ", Style::new()),
+            span(format!("{:<18}", "Provider"), accent_bold()),
+            span(format!("{:<20}", "Status"), accent_bold()),
+            span(format!("{:<9}", "Targets"), accent_bold()),
+            span(format!("{:<10}", "Mirrors"), accent_bold()),
+            span(format!("{:<14}", "Backend"), accent_bold()),
+            span(format!("{:<15}", "Last Ranked"), accent_bold()),
+        ]));
+        lines.push(Line::from(span(
+            "  ─────────────────────────────────────────────────────────────────────────────",
+            dim(),
+        )));
+
+        for (i, p) in self
+            .providers
+            .iter()
+            .enumerate()
+            .skip(self.list_offset)
+            .take(visible_height)
+        {
+            let is_selected = i == self.selected_idx;
+            let cursor = if is_selected { "▸ " } else { "  " };
+
+            let (status_label, status_style) = match &p.detection {
+                DetectionStatus::Detected => ("✔ Detected", success()),
+                DetectionStatus::NotConfigured => ("· Not Configured", dim()),
+                DetectionStatus::PartiallyConfigured(_) => ("⚠ Partially Config", warning()),
+                DetectionStatus::MissingMirrorlist(_) => ("✘ Missing Target", danger()),
+                DetectionStatus::BackendUnavailable(_) => ("⚠ Backend Missing", warning()),
+                DetectionStatus::Unsupported(_) => ("· Unsupported", dim()),
+            };
+
+            let active_count = p.total_active_mirrors();
+            let targets_count = p.total_targets();
+            let backend_name = p.backend.name();
+            let last_ranked = p.last_ranked.as_deref().unwrap_or("Never");
+
+            let row_style = if is_selected {
+                selected_style(cat_color(3))
+            } else {
+                Style::new()
+            };
+
+            lines.push(Line::from(vec![
+                span(cursor.to_string(), accent_bold()),
+                span(format!("{:<18}", truncate_str(&p.name, 17)), row_style),
+                span(format!("{:<20}", status_label), status_style),
+                span(
+                    format!("{:<9}", format!("{targets_count} file(s)")),
+                    row_style,
+                ),
+                span(
+                    format!("{:<10}", format!("{active_count} active")),
+                    row_style,
+                ),
+                span(format!("{:<14}", backend_name), row_style),
+                span(format!("{:<15}", last_ranked), dim()),
+            ]));
+        }
+
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_provider_detail(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let Some(p) = self.selected_provider() else {
+            return;
+        };
+
+        let block = panel_color(&format!("Provider Detail: {}", p.name), cat_color(3));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let cols = Layout::horizontal([
+            Constraint::Percentage(45), // Left: Configuration and Target info
+            Constraint::Percentage(55), // Right: Mirrorlist URLs & Backups
+        ])
+        .split(inner);
+
+        // Left pane: KV summary
+        let repos_str = if p.repos.is_empty() {
+            "(none configured)".to_string()
+        } else {
+            p.repos.join(", ")
+        };
+
+        let targets_str = if p.mirrorlists.is_empty() {
+            "(no mirrorlist target)".to_string()
+        } else {
+            p.mirrorlists
+                .iter()
+                .map(|t| t.filename())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let backend_avail = match &p.detection {
+            DetectionStatus::BackendUnavailable(reason) => format!("Unavailable: {reason}"),
+            _ => "Available".to_string(),
+        };
+
+        let rows = vec![
+            ("Provider ID", p.id.to_string()),
+            ("Display Name", p.name.clone()),
+            ("Distribution", p.dist_type.clone()),
+            ("Status", p.detection.label().to_string()),
+            ("Repositories", repos_str),
+            ("Mirrorlists", targets_str),
+            ("Ranking Tool", p.backend.name().to_string()),
+            ("Backend Status", backend_avail),
+            ("Active Mirrors", p.total_active_mirrors().to_string()),
+            ("Backups Stored", self.backups.len().to_string()),
+        ];
+        kv_table(f, cols[0], "Configuration", &rows);
+
+        // Right pane: Active mirrors
+        let mut right_lines = Vec::new();
+        right_lines.push(Line::from(vec![
+            span("Active Mirrors inside Target: ", accent_bold()),
+            span(format!("({} total)", p.total_active_mirrors()), dim()),
+        ]));
+        right_lines.push(Line::from(span(
+            "──────────────────────────────────────────────────",
+            dim(),
+        )));
+
+        let mut idx = 1;
+        for target in &p.mirrorlists {
+            right_lines.push(Line::from(vec![
+                span("File: ", accent_bold()),
+                span(target.path.display().to_string(), hint()),
+            ]));
+
+            for mirror in &target.active_mirrors {
+                let cursor = if idx - 1 == self.detail_mirror_idx {
+                    "▸ "
+                } else {
+                    "  "
+                };
+                let style = if idx - 1 == self.detail_mirror_idx {
+                    selected_style(cat_color(3))
+                } else {
+                    Style::new()
+                };
+                right_lines.push(Line::from(vec![
+                    span(cursor.to_string(), accent_bold()),
+                    span(format!("{:>2}. ", idx), dim()),
+                    span(mirror.url.clone(), style),
+                ]));
+                idx += 1;
+            }
+        }
+
+        if p.total_active_mirrors() == 0 {
+            right_lines.push(Line::from(span(
+                "  (No active mirrors found in mirrorlist file)",
+                dim(),
+            )));
+        }
+
+        f.render_widget(
+            Paragraph::new(right_lines).block(panel("Mirror Targets")),
+            cols[1],
+        );
+    }
+
+    fn draw_bulk_rank(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let block = panel_color("Bulk Ranking Workflow", cat_color(1));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let chunks = Layout::vertical([Constraint::Fill(1), Constraint::Length(4)]).split(inner);
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(span(
+            "Select providers to rank in one automated operation:",
+            hint(),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, p) in self.providers.iter().enumerate() {
+            let is_focused = i == self.bulk_idx;
+            let is_checked = self.bulk_selected.get(i).copied().unwrap_or(false);
+            let check_box = if is_checked { "[✔]" } else { "[ ]" };
+            let cursor = if is_focused { "▸ " } else { "  " };
+
+            let status_note = if !p.is_supported() {
+                "(unsupported backend)"
+            } else if !p.detection.is_detected() {
+                "(not detected)"
+            } else {
+                ""
+            };
+
+            let row_style = if is_focused {
+                selected_style(cat_color(1))
+            } else {
+                Style::new()
+            };
+
+            lines.push(Line::from(vec![
+                span(cursor.to_string(), accent_bold()),
+                span(
+                    format!("{check_box} "),
+                    if is_checked { success() } else { dim() },
+                ),
+                span(format!("{:<20}", p.name), row_style),
+                span(format!("{:<15}", p.backend.name()), dim()),
+                span(format!("{:>2} target(s) ", p.total_targets()), dim()),
+                span(status_note.to_string(), warning()),
+            ]));
+        }
+
+        f.render_widget(Paragraph::new(lines), chunks[0]);
+
+        // Summary footer
+        let selected_count = self.bulk_selected.iter().filter(|&&s| s).count();
+        let summary =
+            vec![
+            Line::from(vec![
+                span("Summary: ", accent_bold()),
+                span(format!("{selected_count} providers selected | "), success()),
+                span("Backups created automatically before each modification", dim()),
+            ]),
+            Line::from(span(
+                "Press [Enter] to start bulk ranking, [Space] to toggle, [a] select/deselect all",
+                hint(),
+            )),
+        ];
+        f.render_widget(Paragraph::new(summary).block(panel("Ready")), chunks[1]);
+    }
+
+    fn draw_benchmark(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let block = panel_color("Real-Time Mirror Benchmark", cat_color(2));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let chunks = Layout::vertical([
+            Constraint::Length(3), // Progress indicator
+            Constraint::Fill(1),   // Benchmark results table
+        ])
+        .split(inner);
+
+        // Progress bar / text
+        let status_line = Line::from(vec![
+            span("Progress: ", accent_bold()),
+            span(
+                self.bench_progress_msg.clone(),
+                if self.bench_finished {
+                    success()
+                } else {
+                    accent()
+                },
+            ),
+        ]);
+        f.render_widget(
+            Paragraph::new(vec![status_line]).block(panel("Status")),
+            chunks[0],
+        );
+
+        // Results table
+        let mut lines = Vec::new();
+        lines.push(Line::from(vec![
+            span(format!("{:<4}", "#"), accent_bold()),
+            span(format!("{:<45}", "Mirror URL"), accent_bold()),
+            span(format!("{:<10}", "HTTP Code"), accent_bold()),
+            span(format!("{:<12}", "Latency"), accent_bold()),
+            span(format!("{:<15}", "Throughput"), accent_bold()),
+            span(format!("{:<12}", "Status"), accent_bold()),
+        ]));
+        lines.push(Line::from(span(
+            "─────────────────────────────────────────────────────────────────────────────────────────────",
+            dim(),
+        )));
+
+        for (i, res) in self.bench_results.iter().enumerate() {
+            let http_str = res
+                .http_status
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let lat_str = res
+                .latency_ms
+                .map(|l| format!("{l} ms"))
+                .unwrap_or_else(|| "-".to_string());
+            let speed_str = res
+                .throughput_kbps
+                .map(|s| format!("{s:.1} KB/s"))
+                .unwrap_or_else(|| "-".to_string());
+            let (stat_str, stat_style) = if res.reachable {
+                ("OK", success())
+            } else {
+                ("FAILED", danger())
+            };
+
+            lines.push(Line::from(vec![
+                span(format!("{:<4}", i + 1), dim()),
+                span(format!("{:<45}", truncate_str(&res.url, 44)), Style::new()),
+                span(format!("{:<10}", http_str), Style::new()),
+                span(format!("{:<12}", lat_str), accent()),
+                span(format!("{:<15}", speed_str), success()),
+                span(format!("{:<12}", stat_str), stat_style),
+            ]));
+        }
+
+        if self.bench_results.is_empty() {
+            lines.push(Line::from(span("  Benchmarking mirrors...", dim())));
+        }
+
+        f.render_widget(
+            Paragraph::new(lines).block(panel("Benchmark Results")),
+            chunks[1],
+        );
+    }
+
+    fn draw_restore(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let block = panel_color("Mirrorlist Backup History & Restoration", cat_color(4));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(span(
+            "Select a timestamped backup to restore. The current mirrorlist will be safely backed up first:",
+            hint(),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, b) in self.backups.iter().enumerate() {
+            let is_sel = i == self.selected_backup_idx;
+            let cursor = if is_sel { "▸ " } else { "  " };
+            let style = if is_sel {
+                selected_style(cat_color(4))
+            } else {
+                Style::new()
+            };
+
+            lines.push(Line::from(vec![
+                span(cursor.to_string(), accent_bold()),
+                span(format!("{:<30}", b.filename()), style),
+                span(
+                    format!("{:<18}", format!("Timestamp: {}", b.timestamp)),
+                    dim(),
+                ),
+                span(
+                    format!("{:<15}", format!("{} mirrors", b.mirror_count)),
+                    success(),
+                ),
+                span(format!("{:>8} bytes", b.size_bytes), dim()),
+            ]));
+        }
+
+        if self.backups.is_empty() {
+            lines.push(Line::from(span(
+                "  No backups found for this mirrorlist.",
+                dim(),
+            )));
+        }
+
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_custom(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let block = panel_color("Custom Mirror Providers", cat_color(5));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let mut lines = Vec::new();
+        lines.push(Line::from(span(
+            "User-registered mirror providers stored in ~/.config/archman/custom_mirrors.conf:",
+            hint(),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, p) in self.custom_providers.iter().enumerate() {
+            let is_sel = i == self.selected_custom_idx;
+            let cursor = if is_sel { "▸ " } else { "  " };
+            let style = if is_sel {
+                selected_style(cat_color(5))
+            } else {
+                Style::new()
+            };
+
+            lines.push(Line::from(vec![
+                span(cursor.to_string(), accent_bold()),
+                span(format!("{:<16}", p.id.as_str()), style),
+                span(format!("{:<20}", p.name), style),
+                span(format!("{:<30}", p.mirrorlist.display()), dim()),
+                span(format!("Backend: {}", p.backend_type), accent()),
+            ]));
+        }
+
+        if self.custom_providers.is_empty() {
+            lines.push(Line::from(span(
+                "  No custom providers registered. Press [a] to add a new provider.",
+                dim(),
+            )));
+        }
+
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() > max {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    } else {
+        s.to_string()
+    }
+}
+
+// ── Repository Management Helpers (Preserved for repos.rs) ───────────
 
 /// Enable Chaotic-AUR repository by importing keys, installing keyring/mirrorlist,
 /// configuring /etc/pacman.conf, and refreshing databases.
@@ -399,336 +1694,181 @@ echo "==> BlackArch repository removed successfully!"
     );
 }
 
-impl Screen for MirrorsScreen {
-    fn handle_key(&mut self, app: &mut App, key: KeyEvent) {
-        if self.menu.handle_key(&key) {
-            return;
-        }
-        match key.code {
-            KeyCode::Enter => match self.menu.selected {
-                0 | 1 => {
-                    let mode = if self.menu.selected == 0 {
-                        ReflectorMode::Auto
-                    } else {
-                        ReflectorMode::Rank
-                    };
-                    if !app.caps().reflector {
-                        app.toast("reflector is not installed.", Sev::Warn);
-                        if app.settings().is_true("CONFIRM_ACTIONS") {
-                            app.confirm("Install reflector?", false);
-                            self.await_kind = Some(Await::InstallReflector);
-                        } else {
-                            self.execute_install_reflector(app);
-                        }
-                    } else {
-                        self.country_for = Some(mode);
-                        app.ask_input("Country name or code (leave blank for global)");
-                    }
-                }
-                2 => {
-                    let servers = sys::mirror_servers();
-                    if servers.is_empty() {
-                        app.toast(
-                            format!("No active mirrors found in {MIRRORLIST}"),
-                            Sev::Warn,
-                        );
-                    } else {
-                        let lines: Vec<Vec<Span>> = servers
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, m)| {
-                                vec![
-                                    widgets::span(
-                                        format!("{:>3}. ", i + 1),
-                                        widgets::accent_bold(),
-                                    ),
-                                    Span::styled(m, Style::new()),
-                                ]
-                            })
-                            .collect();
-                        app.push(ViewerScreen::new("📋 Current Mirrors", lines));
-                    }
-                }
-                3 => {
-                    app.log("MIRRORS: Backing up mirrorlist");
-                    app.queue_ext(
-                        ExtCmd::new(
-                            "mirrors-backup",
-                            "sudo",
-                            &args(&["cp", MIRRORLIST, MIRRORLIST_BACKUP]),
-                        )
-                        .note("Backup current mirrorlist")
-                        .result(
-                            "Mirrorlist backed up.",
-                            "Backup failed.",
-                            "MIRRORS: backup finished",
-                        ),
-                    );
-                }
-                4 => {
-                    if std::path::Path::new(MIRRORLIST_BACKUP).exists() {
-                        let date = crate::sys::capture("stat", &["-c", "%y", MIRRORLIST_BACKUP])
-                            .map(|s| s.split('.').next().unwrap_or(&s).to_string())
-                            .unwrap_or_else(|| "unknown".into());
-                        app.toast(format!("Backup found: {MIRRORLIST_BACKUP}"), Sev::Info);
-                        app.toast(format!("Created: {date}"), Sev::Info);
-                        if app.settings().is_true("CONFIRM_ACTIONS") {
-                            app.confirm("Restore mirrorlist from backup?", false);
-                            self.await_kind = Some(Await::RestoreBackup);
-                        } else {
-                            self.execute_restore_backup(app);
-                        }
-                    } else {
-                        app.toast(
-                            format!("No backup found at {MIRRORLIST_BACKUP}"),
-                            Sev::Error,
-                        );
-                    }
-                }
-                5 => {
-                    app.push(Box::new(super::repos::ReposScreen::new(
-                        app,
-                        super::repos::RepoMode::Add,
-                    )));
-                }
-                6 => {
-                    app.push(Box::new(super::repos::ReposScreen::new(
-                        app,
-                        super::repos::RepoMode::Remove,
-                    )));
-                }
-                _ => app.pop(),
-            },
-            KeyCode::Esc | KeyCode::Char('q') => app.pop(),
-            _ => {}
-        }
-    }
-
-    fn draw(&mut self, f: &mut Frame<'_>, area: Rect) {
-        self.chaotic_aur_enabled = sys::is_chaotic_aur_enabled();
-        self.cachyos_enabled = sys::is_cachyos_repo_enabled();
-        self.blackarch_enabled = sys::is_blackarch_enabled();
-        let count = sys::mirror_count();
-        let rows = Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).split(area);
-        kv_table(
-            f,
-            rows[0],
-            "🌍  Mirrors & Repositories",
-            &[
-                ("Mirrorlist", MIRRORLIST.to_string()),
-                ("Active Mirrors", count.to_string()),
-                (
-                    "Reflector",
-                    if self.reflector_installed {
-                        "installed"
-                    } else {
-                        "not installed"
-                    }
-                    .to_string(),
-                ),
-                (
-                    "Chaotic-AUR",
-                    if self.chaotic_aur_enabled {
-                        "enabled"
-                    } else {
-                        "not enabled"
-                    }
-                    .to_string(),
-                ),
-                (
-                    "CachyOS Repos",
-                    if self.cachyos_enabled {
-                        "enabled"
-                    } else {
-                        "not enabled"
-                    }
-                    .to_string(),
-                ),
-                (
-                    "BlackArch",
-                    if self.blackarch_enabled {
-                        "enabled"
-                    } else {
-                        "not enabled"
-                    }
-                    .to_string(),
-                ),
-            ],
-        );
-        self.menu.render(f, rows[1]);
-    }
-
-    fn help_hints(&self) -> Vec<&'static str> {
-        vec!["↑↓ navigate", "enter select", "esc back"]
-    }
-
-    fn on_confirm(&mut self, app: &mut App, yes: bool) {
-        let Some(await_kind) = self.await_kind.take() else {
-            return;
-        };
-        match await_kind {
-            Await::InstallReflector => {
-                if !yes {
-                    return;
-                }
-                self.execute_install_reflector(app);
-            }
-            Await::RestoreBackup => {
-                if !yes {
-                    return;
-                }
-                self.execute_restore_backup(app);
-            }
-        }
-    }
-
-    fn on_input(&mut self, app: &mut App, value: String) {
-        let Some(mode) = self.country_for.take() else {
-            return;
-        };
-        let country = value.trim().to_string();
-        self.run_reflector(
-            app,
-            mode,
-            if country.is_empty() {
-                None
-            } else {
-                Some(country)
-            },
-        );
-    }
-
-    fn on_ext_done(&mut self, app: &mut App, tag: &str, ok: bool) {
-        match tag {
-            "mirrors-dep" => {
-                app.refresh_caps();
-                self.reflector_installed = app.caps().reflector;
-                if self.reflector_installed {
-                    app.toast("reflector installed.", Sev::Success);
-                } else {
-                    app.toast("Failed to install reflector.", Sev::Error);
-                }
-            }
-            "mirrors-auto" | "mirrors-rank" => {
-                if ok {
-                    let count = sys::mirror_count();
-                    let msg = if tag == "mirrors-auto" {
-                        format!("Mirrorlist updated! ({count} mirrors)")
-                    } else {
-                        "Mirrorlist updated with fastest mirrors!".to_string()
-                    };
-                    app.toast(msg, Sev::Success);
-                    app.log(&format!("MIRRORS: Updated to {count} mirrors"));
-                } else {
-                    app.toast("reflector failed. Restoring backup...", Sev::Error);
-                    app.log("MIRRORS: reflector failed, backup restored");
-                    if std::path::Path::new(MIRRORLIST_BACKUP).exists() {
-                        app.queue_ext(
-                            ExtCmd::new(
-                                "mirrors-fallback",
-                                "sudo",
-                                &args(&["cp", MIRRORLIST_BACKUP, MIRRORLIST]),
-                            )
-                            .note("Restore mirrorlist backup"),
-                        );
-                    }
-                }
-            }
-            "mirrors-backup" => {
-                if ok {
-                    app.toast(
-                        format!("Mirrorlist backed up to {MIRRORLIST_BACKUP}"),
-                        Sev::Success,
-                    );
-                    app.log("MIRRORS: Backup successful");
-                } else {
-                    app.toast("Backup failed.", Sev::Error);
-                    app.log("MIRRORS: Backup failed");
-                }
-            }
-            "mirrors-restore" => {
-                if ok {
-                    app.toast("Mirrorlist restored!", Sev::Success);
-                    app.log("MIRRORS: Mirrorlist restored");
-                } else {
-                    app.toast("Restore failed.", Sev::Error);
-                    app.log("MIRRORS: Restore failed");
-                }
-            }
-            "mirrors-chaotic-aur" | "run-enable-chaotic-aur" => {
-                app.refresh_caps();
-                self.chaotic_aur_enabled = app.caps().chaotic_aur;
-                if ok {
-                    app.toast("Chaotic-AUR repository enabled!", Sev::Success);
-                } else {
-                    app.toast("Failed to enable Chaotic-AUR repository.", Sev::Error);
-                }
-            }
-            "mirrors-chaotic-aur-remove" | "run-remove-chaotic-aur" => {
-                app.refresh_caps();
-                self.chaotic_aur_enabled = app.caps().chaotic_aur;
-                if ok {
-                    app.toast("Chaotic-AUR repository removed!", Sev::Success);
-                } else {
-                    app.toast("Failed to remove Chaotic-AUR repository.", Sev::Error);
-                }
-            }
-            "mirrors-cachyos" | "run-enable-cachyos-repo" => {
-                app.refresh_caps();
-                self.cachyos_enabled = app.caps().cachyos;
-                if ok {
-                    app.toast("CachyOS repositories enabled!", Sev::Success);
-                } else {
-                    app.toast("Failed to enable CachyOS repositories.", Sev::Error);
-                }
-            }
-            "mirrors-cachyos-remove" | "run-remove-cachyos-repo" => {
-                app.refresh_caps();
-                self.cachyos_enabled = app.caps().cachyos;
-                if ok {
-                    app.toast("CachyOS repositories removed!", Sev::Success);
-                } else {
-                    app.toast("Failed to remove CachyOS repositories.", Sev::Error);
-                }
-            }
-            "mirrors-blackarch" | "run-enable-blackarch" => {
-                app.refresh_caps();
-                self.blackarch_enabled = app.caps().blackarch;
-                if ok {
-                    app.toast("BlackArch repository enabled!", Sev::Success);
-                } else {
-                    app.toast("Failed to enable BlackArch repository.", Sev::Error);
-                }
-            }
-            "mirrors-blackarch-remove" | "run-remove-blackarch" => {
-                app.refresh_caps();
-                self.blackarch_enabled = app.caps().blackarch;
-                if ok {
-                    app.toast("BlackArch repository removed!", Sev::Success);
-                } else {
-                    app.toast("Failed to remove BlackArch repository.", Sev::Error);
-                }
-            }
-            _ => {}
-        }
-    }
-}
+// ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::backend::TestBackend;
 
-    #[test]
-    fn test_mirrors_menu_items() {
-        assert_eq!(MENU_ITEMS.len(), 8);
-        assert!(MENU_ITEMS[5].contains("Add repositories"));
-        assert!(MENU_ITEMS[6].contains("Remove repositories"));
+    fn text_of(term: &ratatui::Terminal<TestBackend>) -> String {
+        term.backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect()
     }
 
     #[test]
     fn test_mirrors_screen_creation() {
         let app = App::new();
         let screen = MirrorsScreen::new(&app);
-        assert_eq!(screen.menu.items.len(), 8);
+        assert!(!screen.providers.is_empty());
+        assert_eq!(screen.mode, MirrorViewMode::List);
+    }
+
+    #[test]
+    fn test_mirrors_screen_navigation() {
+        let app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+        assert_eq!(screen.selected_idx, 0);
+
+        let down_key = KeyEvent::from(KeyCode::Down);
+        screen.handle_key(&mut App::new(), down_key);
+        if screen.providers.len() > 1 {
+            assert_eq!(screen.selected_idx, 1);
+        }
+
+        let up_key = KeyEvent::from(KeyCode::Up);
+        screen.handle_key(&mut App::new(), up_key);
+        assert_eq!(screen.selected_idx, 0);
+    }
+
+    #[test]
+    fn test_mirrors_screen_mode_transitions() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+
+        // Open detail
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(screen.mode, MirrorViewMode::Detail);
+
+        // Return to list
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(screen.mode, MirrorViewMode::List);
+
+        // Open bulk rank
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('A')));
+        assert_eq!(screen.mode, MirrorViewMode::BulkRank);
+
+        // Toggle bulk selection
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(screen.mode, MirrorViewMode::List);
+
+        // Open custom providers
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('c')));
+        assert_eq!(screen.mode, MirrorViewMode::Custom);
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(screen.mode, MirrorViewMode::List);
+    }
+
+    #[test]
+    fn test_mirrors_screen_provider_list_rendering() {
+        let app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+        let mut term = ratatui::Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+        term.draw(|f| screen.draw(f, f.area())).unwrap();
+        let text = text_of(&term);
+
+        assert!(text.contains("Provider-Aware Mirror Management"));
+        assert!(text.contains("Provider"));
+        assert!(text.contains("Status"));
+        assert!(text.contains("Arch Linux"));
+    }
+
+    #[test]
+    fn test_mirrors_screen_detail_rendering() {
+        let app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+        let mut term = ratatui::Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+        screen.open_detail();
+        term.draw(|f| screen.draw(f, f.area())).unwrap();
+        let text = text_of(&term);
+
+        assert!(text.contains("Provider Detail:"));
+        assert!(text.contains("Configuration"));
+        assert!(text.contains("Mirror Targets"));
+    }
+
+    #[test]
+    fn test_mirrors_screen_bulk_rendering_and_selection() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+        let mut term = ratatui::Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('A')));
+        assert_eq!(screen.mode, MirrorViewMode::BulkRank);
+
+        term.draw(|f| screen.draw(f, f.area())).unwrap();
+        let text = text_of(&term);
+        assert!(text.contains("Bulk Ranking Workflow"));
+        assert!(text.contains("Summary:"));
+
+        // Toggle all selection
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        assert!(screen.bulk_selected.iter().all(|&s| !s));
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        assert!(screen.bulk_selected.iter().all(|&s| s));
+    }
+
+    #[test]
+    fn test_mirrors_screen_progress_reporting_and_cancellation() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        screen.bench_rx = Some(rx);
+        screen.bench_cancel = Some(Arc::new(AtomicBool::new(false)));
+        screen.mode = MirrorViewMode::Benchmark;
+
+        // Send progress message
+        tx.send(BenchmarkProgress {
+            total: 10,
+            completed: 3,
+            current_mirror: "https://test.mirror.org".to_string(),
+            result: Some(BenchmarkResult {
+                url: "https://test.mirror.org".to_string(),
+                reachable: true,
+                http_status: Some(200),
+                latency_ms: Some(42),
+                throughput_kbps: Some(1500.0),
+                error: None,
+            }),
+            finished: false,
+        })
+        .unwrap();
+
+        screen.poll(&mut app);
+        assert_eq!(screen.bench_results.len(), 1);
+        assert!(screen.bench_progress_msg.contains("3 of 10"));
+
+        // Cancellation with Esc
+        screen.handle_key(&mut app, KeyEvent::from(KeyCode::Esc));
+        assert_eq!(screen.mode, MirrorViewMode::List);
+        assert!(screen.bench_cancel.as_ref().unwrap().load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_mirrors_screen_error_handling() {
+        let mut app = App::new();
+        let mut screen = MirrorsScreen::new(&app);
+
+        // When non-existent candidate file is signaled done
+        let plan = RankingPlan {
+            provider_id: ProviderId::new("arch"),
+            provider_name: "Arch Linux".to_string(),
+            target_mirrorlist: PathBuf::from("/etc/pacman.d/mirrorlist"),
+            candidate_temp_file: PathBuf::from("/nonexistent/candidate.tmp"),
+            backup_path: PathBuf::from("/etc/pacman.d/mirrorlist.bak"),
+            generate_cmd: ExtCmd::new("test", "echo", &[]),
+        };
+        screen.pending_plan = Some(plan);
+
+        screen.on_ext_done(&mut app, "mirrors-rank-generate", true);
+        assert!(screen.pending_plan.is_none()); // Cleaned up upon validation failure!
     }
 }
